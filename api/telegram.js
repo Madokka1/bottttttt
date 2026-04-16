@@ -70,8 +70,15 @@ function parseImgCommand(text) {
 }
 
 async function generateImage(prompt) {
-  const hfToken = process.env.HF_TOKEN || process.env.HUGGINGFACE_TOKEN;
+  let hfToken = process.env.HF_TOKEN || process.env.HUGGINGFACE_TOKEN;
   if (!hfToken) throw new Error("HF_TOKEN is not set");
+  hfToken = hfToken.trim();
+  if (/^bearer\s+/i.test(hfToken)) hfToken = hfToken.replace(/^bearer\s+/i, "").trim();
+  if (!hfToken.startsWith("hf_")) {
+    throw new Error(
+      "HF_TOKEN must be a Hugging Face Access Token (usually starts with 'hf_'). Create one in Hugging Face Settings → Access Tokens."
+    );
+  }
 
   const model = process.env.HF_TEXT_TO_IMAGE_MODEL || "runwayml/stable-diffusion-v1-5";
   const endpointUrl =
@@ -131,7 +138,12 @@ function formatHfError(err) {
   const extra = bodyText ? `\n${bodyText}` : "";
   const header = parts.length ? `${parts.join(" | ")}\n` : "";
 
-  return (header + msg + extra).slice(0, 3500);
+  const hint =
+    status === 401
+      ? "\n\nПодсказка: проверь, что `HF_TOKEN` — это Hugging Face Access Token вида `hf_...` (Settings → Access Tokens) и что в значении нет лишнего `Bearer ` / пробелов."
+      : "";
+
+  return (header + msg + extra + hint).slice(0, 3500);
 }
 
 function sendJson(res, statusCode, payload) {
