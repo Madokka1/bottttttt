@@ -153,16 +153,34 @@ async function stylizePhoto(inputImageBlob) {
   const { InferenceClient } = await import("@huggingface/inference");
   const client = new InferenceClient(hfToken);
 
-  return await client.imageToImage({
-    model,
-    inputs: inputImageBlob,
-    parameters: {
-      prompt: stylePrompt,
-      // keep it fast for serverless; providers may ignore unsupported params
-      num_inference_steps: 5
-    },
-    options: { wait_for_model: true, use_cache: true }
-  });
+  const providersCsv = (process.env.HF_IMAGE_PROVIDERS || "").trim();
+  const providers = providersCsv
+    ? providersCsv.split(",").map((p) => p.trim()).filter(Boolean)
+    : ["wavespeed", "replicate", "fal-ai"];
+
+  let lastErr;
+  for (const provider of providers) {
+    try {
+      return await client.imageToImage({
+        provider,
+        model,
+        inputs: inputImageBlob,
+        parameters: {
+          prompt: stylePrompt,
+          // keep it fast for serverless; providers may ignore unsupported params
+          num_inference_steps: 5
+        },
+        options: { wait_for_model: true, use_cache: true }
+      });
+    } catch (err) {
+      lastErr = err;
+      const status = err?.httpResponse?.status;
+      // 402 = provider requires credits; try next provider if available
+      if (status === 402) continue;
+      throw err;
+    }
+  }
+  throw lastErr ?? new Error("All image providers failed");
 }
 
 function guessFileNameFromMime(mimeType) {
@@ -205,6 +223,8 @@ function formatHfError(err) {
   const hint =
     status === 401
       ? "\n\nПодсказка: проверь, что `HF_TOKEN` — это Hugging Face Access Token вида `hf_...` (Settings → Access Tokens) и что в значении нет лишнего `Bearer ` / пробелов."
+      : status === 402
+        ? "\n\nПодсказка: это платный inference-провайдер. Для работы нужно пополнить Hugging Face credits (Billing) или выбрать/подключить другого провайдера."
       : "";
 
   return (header + msg + extra + hint).slice(0, 3500);

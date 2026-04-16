@@ -11,6 +11,7 @@
 - (опционально) `HF_ENDPOINT_URL` — явный endpoint Hugging Face Router (например `https://router.huggingface.co/hf-inference/models/<model>`)
 - `IMG_STYLE_PROMPT` — фиксированный промпт-стиль для обработки фото (по умолчанию `В мире дикой природы`)
 - (опционально) `HF_IMAGE_TO_IMAGE_MODEL` — модель для image-to-image (по умолчанию `black-forest-labs/FLUX.1-Kontext-dev`)
+- (опционально) `HF_IMAGE_PROVIDERS` — приоритет провайдеров для обработки фото (через запятую), напр. `wavespeed,replicate,fal-ai`
 
 ## Команды
 
