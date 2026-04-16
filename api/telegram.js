@@ -77,7 +77,7 @@ async function generateImage(prompt) {
   const endpointUrl =
     process.env.HF_ENDPOINT_URL ||
     process.env.HF_INFERENCE_ENDPOINT_URL ||
-    `https://api-inference.huggingface.co/models/${model}`;
+    `https://router.huggingface.co/hf-inference/models/${model}`;
 
   const { InferenceClient } = await import("@huggingface/inference");
   const client = new InferenceClient(hfToken);
