@@ -10,7 +10,5 @@
   "scripts": {
     "set-webhook": "node scripts/setWebhook.mjs"
   },
-  "dependencies": {
-    "@huggingface/inference": "^4.13.15"
-  }
+  "dependencies": {}
 }

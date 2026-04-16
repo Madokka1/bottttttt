@@ -20,6 +20,15 @@ function getJsonBody(req) {
   });
 }
 
+function getHordeApiKey() {
+  // Anonymous key is allowed by AI Horde, but has stricter limits.
+  return (process.env.HORDE_API_KEY || "0000000000").trim();
+}
+
+function getHordeBaseUrl() {
+  return (process.env.HORDE_BASE_URL || "https://stablehorde.net/api/v2").replace(/\/+$/, "");
+}
+
 async function telegramApi(method, payload) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set");
@@ -163,93 +172,139 @@ async function blobToBase64(blob) {
   return Buffer.from(ab).toString("base64");
 }
 
-async function generateImage(prompt) {
-  let hfToken = process.env.HF_TOKEN || process.env.HUGGINGFACE_TOKEN;
-  if (!hfToken) throw new Error("HF_TOKEN is not set");
-  hfToken = hfToken.trim();
-  if (/^bearer\s+/i.test(hfToken)) hfToken = hfToken.replace(/^bearer\s+/i, "").trim();
-  if (!hfToken.startsWith("hf_")) {
-    throw new Error(
-      "HF_TOKEN must be a Hugging Face Access Token (usually starts with 'hf_'). Create one in Hugging Face Settings → Access Tokens."
-    );
+function parseCommaList(value) {
+  const raw = (value || "").trim();
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function hordeFetch(path, init) {
+  const url = `${getHordeBaseUrl()}${path}`;
+  const headers = {
+    ...(init?.headers || {}),
+    apikey: getHordeApiKey(),
+    "content-type": "application/json"
+  };
+  const resp = await fetch(url, { ...init, headers });
+  const json = await resp.json().catch(() => null);
+  if (!resp.ok) {
+    const details = json ? JSON.stringify(json) : String(resp.status);
+    const err = new Error(`AI Horde error: ${details}`);
+    err.httpStatus = resp.status;
+    err.httpBody = json ?? details;
+    err.httpUrl = url;
+    throw err;
+  }
+  return json;
+}
+
+function formatHttpError(err) {
+  const status = err?.httpStatus;
+  const url = err?.httpUrl;
+  const body = err?.httpBody;
+  const msg = typeof err?.message === "string" ? err.message : String(err);
+
+  let bodyText = "";
+  if (typeof body === "string") bodyText = body;
+  else if (body && typeof body === "object") {
+    const candidate =
+      typeof body.message === "string"
+        ? body.message
+        : typeof body.error === "string"
+          ? body.error
+          : typeof body.detail === "string"
+            ? body.detail
+            : "";
+    bodyText = candidate || JSON.stringify(body);
   }
 
-  // Pick a model that is actually served by HF Inference (catalog changes over time).
-  // Defaulting to a commonly-available text-to-image model on hf-inference.
-  const model =
-    process.env.HF_TEXT_TO_IMAGE_MODEL || "black-forest-labs/FLUX.1-schnell";
-  const endpointUrl =
-    process.env.HF_ENDPOINT_URL ||
-    process.env.HF_INFERENCE_ENDPOINT_URL ||
-    `https://router.huggingface.co/hf-inference/models/${model}`;
+  const header = `${typeof status === "number" ? `HTTP ${status}` : ""}${url ? ` | ${url}` : ""}`.trim();
+  const extra = bodyText ? `\n${bodyText}` : "";
+  const hint =
+    status === 429
+      ? "\n\nПодсказка: лимит AI Horde исчерпан, попробуй через минуту или используй свой HORDE_API_KEY."
+      : "";
+  return `${header ? header + "\n" : ""}${msg}${extra}${hint}`.slice(0, 3500);
+}
 
-  const { InferenceClient } = await import("@huggingface/inference");
-  const client = new InferenceClient(hfToken);
+async function hordeGenerate({ prompt, sourceImageBlob }) {
+  const models = parseCommaList(process.env.HORDE_MODELS);
+  const steps = Number(process.env.HORDE_STEPS || 20);
+  const width = Number(process.env.HORDE_WIDTH || 512);
+  const height = Number(process.env.HORDE_HEIGHT || 512);
+  const denoisingStrength = Number(process.env.HORDE_DENOISING || 0.6);
 
-  const isStableDiffusionFamily =
-    model.includes("stable-diffusion") ||
-    model.includes("sdxl") ||
-    model.startsWith("stabilityai/");
+  const payload = {
+    prompt,
+    params: {
+      n: 1,
+      steps: Number.isFinite(steps) ? steps : 20,
+      width: Number.isFinite(width) ? width : 512,
+      height: Number.isFinite(height) ? height : 512
+    },
+    r2: false,
+    censor_nsfw: true,
+    trusted_workers: false
+  };
 
-  // Returns a Blob in Node 18+
-  return await client.textToImage({
-    // Use explicit endpoint to avoid provider-mapping lookups (which may be missing for some models)
-    endpointUrl,
-    inputs: prompt,
-    // Keep it fast for serverless timeouts / free inference (only for SD-like models)
-    ...(isStableDiffusionFamily ? { parameters: { num_inference_steps: 5 } } : {}),
-    // HF Inference API options (helps with cold starts)
-    options: { wait_for_model: true, use_cache: true }
+  if (models.length) payload.models = models;
+
+  if (sourceImageBlob) {
+    payload.source_processing = "img2img";
+    payload.source_image = await blobToBase64(sourceImageBlob);
+    payload.params.denoising_strength = Number.isFinite(denoisingStrength) ? denoisingStrength : 0.6;
+  }
+
+  const submit = await hordeFetch("/generate/async", {
+    method: "POST",
+    body: JSON.stringify(payload)
   });
+
+  const id = submit?.id;
+  if (!id) throw new Error("AI Horde: missing job id");
+
+  const timeoutMs = Number(process.env.HORDE_TIMEOUT_MS || 25000);
+  const start = Date.now();
+
+  while (Date.now() - start < timeoutMs) {
+    const check = await hordeFetch(`/generate/check/${id}`, { method: "GET" });
+    if (check?.done === true) {
+      const status = await hordeFetch(`/generate/status/${id}`, { method: "GET" });
+      const gen = status?.generations?.[0];
+      const b64 = gen?.img;
+      if (!b64) throw new Error("AI Horde: generation finished but no image data");
+      // Stable Horde returns WEBP base64 by default
+      const bytes = Buffer.from(b64, "base64");
+      return new Blob([bytes], { type: "image/webp" });
+    }
+    await sleep(1500);
+  }
+
+  const err = new Error("AI Horde: timed out waiting for generation");
+  err.httpStatus = 504;
+  err.httpBody = { id };
+  err.httpUrl = `${getHordeBaseUrl()}/generate/check/${id}`;
+  throw err;
+}
+
+async function generateImage(prompt) {
+  return await hordeGenerate({ prompt });
 }
 
 async function stylizePhoto(inputImageBlob) {
-  let hfToken = process.env.HF_TOKEN || process.env.HUGGINGFACE_TOKEN;
-  if (!hfToken) throw new Error("HF_TOKEN is not set");
-  hfToken = hfToken.trim();
-  if (/^bearer\s+/i.test(hfToken)) hfToken = hfToken.replace(/^bearer\s+/i, "").trim();
-  if (!hfToken.startsWith("hf_")) {
-    throw new Error(
-      "HF_TOKEN must be a Hugging Face Access Token (usually starts with 'hf_'). Create one in Hugging Face Settings → Access Tokens."
-    );
-  }
-
   const stylePrompt = (process.env.IMG_STYLE_PROMPT || "В мире дикой природы").trim();
-  // FireRed Image Edit (via Inference Providers).
-  const model =
-    process.env.HF_IMAGE_TO_IMAGE_MODEL || "FireRedTeam/FireRed-Image-Edit-1.0";
-
-  const { InferenceClient } = await import("@huggingface/inference");
-  const client = new InferenceClient(hfToken);
-
-  const providersCsv = (process.env.HF_IMAGE_PROVIDERS || "").trim();
-  const providers = providersCsv
-    ? providersCsv.split(",").map((p) => p.trim()).filter(Boolean)
-    : ["fal-ai"];
-
-  let lastErr;
-  for (const provider of providers) {
-    try {
-      return await client.imageToImage({
-        provider,
-        model,
-        inputs: inputImageBlob,
-        parameters: {
-          prompt: stylePrompt,
-          // keep it fast for serverless; providers may ignore unsupported params
-          num_inference_steps: 5
-        },
-        options: { wait_for_model: true, use_cache: true }
-      });
-    } catch (err) {
-      lastErr = err;
-      const status = err?.httpResponse?.status;
-      // 402 = provider requires credits; try next provider if available
-      if (status === 402) continue;
-      throw err;
-    }
-  }
-  throw lastErr ?? new Error("All image providers failed");
+  const prompt =
+    "Отредактируй изображение в стилистике: " +
+    stylePrompt +
+    ". Сохрани композицию, но сделай общий стиль соответствующим.";
+  return await hordeGenerate({ prompt, sourceImageBlob: inputImageBlob });
 }
 
 function guessFileNameFromMime(mimeType) {
@@ -261,42 +316,7 @@ function guessFileNameFromMime(mimeType) {
 }
 
 function formatHfError(err) {
-  const status = err?.httpResponse?.status;
-  const requestId = err?.httpResponse?.requestId;
-  const body = err?.httpResponse?.body;
-  const url = err?.httpRequest?.url;
-
-  const parts = [];
-  if (typeof status === "number") parts.push(`HTTP ${status}`);
-  if (typeof requestId === "string" && requestId) parts.push(`requestId=${requestId}`);
-  if (typeof url === "string" && url) parts.push(url);
-
-  let bodyText = "";
-  if (typeof body === "string") bodyText = body;
-  else if (body && typeof body === "object") {
-    const candidate =
-      typeof body.error === "string"
-        ? body.error
-        : typeof body.message === "string"
-          ? body.message
-          : typeof body.detail === "string"
-            ? body.detail
-            : "";
-    bodyText = candidate || JSON.stringify(body);
-  }
-
-  const msg = typeof err?.message === "string" ? err.message : String(err);
-  const extra = bodyText ? `\n${bodyText}` : "";
-  const header = parts.length ? `${parts.join(" | ")}\n` : "";
-
-  const hint =
-    status === 401
-      ? "\n\nПодсказка: проверь, что `HF_TOKEN` — это Hugging Face Access Token вида `hf_...` (Settings → Access Tokens) и что в значении нет лишнего `Bearer ` / пробелов."
-      : status === 402
-        ? "\n\nПодсказка: это платный inference-провайдер. Для работы нужно пополнить Hugging Face credits (Billing) или выбрать/подключить другого провайдера."
-      : "";
-
-  return (header + msg + extra + hint).slice(0, 3500);
+  return formatHttpError(err);
 }
 
 function sendJson(res, statusCode, payload) {
