@@ -6,6 +6,8 @@
 
 - `TELEGRAM_BOT_TOKEN` — токен от `@BotFather`
 - (опционально) `TELEGRAM_WEBHOOK_SECRET` — секрет для проверки заголовка `X-Telegram-Bot-Api-Secret-Token`
+- (опционально) `START_RULES_TEXT` — текст правил, который показывается на `/start`
+- `REQUIRED_CHANNELS` — каналы-партнеры (через запятую, например `@channel1,@channel2,@channel3`); без подписки генерация недоступна
 - `HF_TOKEN` — токен Hugging Face (нужен для генерации картинок командой `/img`)
 - (опционально) `HF_TEXT_TO_IMAGE_MODEL` — модель для text-to-image (по умолчанию `black-forest-labs/FLUX.1-schnell`)
 - (опционально) `HF_ENDPOINT_URL` — явный endpoint Hugging Face Router (например `https://router.huggingface.co/hf-inference/models/<model>`)

@@ -69,6 +69,19 @@ function mainMenuReplyMarkup() {
   };
 }
 
+let botInfoCache = null;
+async function getBotInfo() {
+  if (botInfoCache) return botInfoCache;
+  botInfoCache = await telegramApi("getMe", {});
+  return botInfoCache;
+}
+
+function getStartRulesText() {
+  const rules = (process.env.START_RULES_TEXT || "").trim();
+  if (rules) return rules;
+  return "Правила:\n1) Не спамить\n2) Не отправлять запрещенный контент";
+}
+
 function parseCommand(text, command) {
   if (!text) return null;
   const trimmed = text.trim();
@@ -99,6 +112,67 @@ function isPending(chatId, now) {
 
 function clearPending(chatId) {
   pendingImageByChatId.delete(String(chatId));
+}
+
+function parseRequiredChannels() {
+  const raw = (process.env.REQUIRED_CHANNELS || "").trim();
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => (s.startsWith("@") ? s : `@${s}`));
+}
+
+function isSubscribedStatus(status) {
+  return status === "creator" || status === "administrator" || status === "member";
+}
+
+async function getSubscriptionStatus(channelUsername, userId) {
+  const member = await telegramApi("getChatMember", {
+    chat_id: channelUsername,
+    user_id: userId
+  });
+  return member?.status;
+}
+
+async function checkRequiredSubscriptions(userId) {
+  const channels = parseRequiredChannels();
+  if (channels.length === 0) return { ok: true, channels: [] };
+
+  const results = [];
+  for (const channel of channels) {
+    try {
+      const status = await getSubscriptionStatus(channel, userId);
+      results.push({ channel, status, ok: isSubscribedStatus(status) });
+    } catch (err) {
+      // Most common reasons:
+      // - bot is not an admin in the channel
+      // - bot is not a member of the channel
+      // - channel username is wrong
+      console.error("getChatMember failed:", channel, err);
+      results.push({ channel, status: "unknown", ok: false, error: err });
+    }
+  }
+
+  const ok = results.every((r) => r.ok);
+  return { ok, channels: results };
+}
+
+function partnersText(channelsStatus) {
+  if (!channelsStatus.length) return "Партнеры не настроены (REQUIRED_CHANNELS).";
+
+  const lines = ["Чтобы пользоваться генерацией, подпишись на партнеров:"];
+  for (const item of channelsStatus) {
+    const mark = item.ok ? "✅" : "❌";
+    const link = `https://t.me/${item.channel.replace(/^@/, "")}`;
+    lines.push(`${mark} ${item.channel} — ${link}`);
+  }
+  lines.push("");
+  lines.push("После подписки нажми кнопку «Сгенерировать» ещё раз.");
+  lines.push("");
+  lines.push("Важно: бот должен иметь доступ к проверке подписки (обычно нужно добавить бота админом в канал).");
+  return lines.join("\n");
 }
 
 async function generateImage(prompt) {
@@ -290,19 +364,34 @@ module.exports = async (req, res) => {
     if (message?.chat?.id) {
       const chatId = message.chat.id;
       const now = Date.now();
+      const userId = message?.from?.id;
 
       // 1) Text commands
       if (typeof message.text === "string") {
         const text = message.text;
 
         if (isStartCommand(text)) {
+          const botInfo = await getBotInfo();
+          const botName = botInfo?.first_name || botInfo?.username || "бот";
+          const rulesText = getStartRulesText();
           await telegramApi("sendMessage", {
             chat_id: chatId,
-            text: "привет",
+            text: `Это бот ${botName}.\n\n${rulesText}`,
             reply_markup: mainMenuReplyMarkup()
           });
         } else {
           if (text.trim() === "Сгенерировать") {
+            if (!userId) {
+              await telegramApi("sendMessage", { chat_id: chatId, text: "Не вижу user_id :(" });
+              return sendJson(res, 200, { ok: true });
+            }
+
+            const subs = await checkRequiredSubscriptions(userId);
+            if (!subs.ok) {
+              await telegramApi("sendMessage", { chat_id: chatId, text: partnersText(subs.channels) });
+              return sendJson(res, 200, { ok: true });
+            }
+
             setPending(chatId, now);
             const stylePrompt = (process.env.IMG_STYLE_PROMPT || "В мире дикой природы").trim();
             await telegramApi("sendMessage", {
@@ -314,10 +403,15 @@ module.exports = async (req, res) => {
               reply_markup: mainMenuReplyMarkup()
             });
           } else if (text.trim() === "Партнеры") {
+            if (!userId) {
+              await telegramApi("sendMessage", { chat_id: chatId, text: "Не вижу user_id :(" });
+              return sendJson(res, 200, { ok: true });
+            }
+
+            const subs = await checkRequiredSubscriptions(userId);
             await telegramApi("sendMessage", {
               chat_id: chatId,
-              text: "Партнеры: пока пусто (сюда добавим список/ссылки).",
-              reply_markup: mainMenuReplyMarkup()
+              text: partnersText(subs.channels)
             });
           }
 
