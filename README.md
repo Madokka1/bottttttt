@@ -7,8 +7,8 @@
 - `TELEGRAM_BOT_TOKEN` — токен от `@BotFather`
 - (опционально) `TELEGRAM_WEBHOOK_SECRET` — секрет для проверки заголовка `X-Telegram-Bot-Api-Secret-Token`
 - `HF_TOKEN` — токен Hugging Face (нужен для генерации картинок командой `/img`)
-- (опционально) `HF_TEXT_TO_IMAGE_MODEL` — модель для text-to-image (по умолчанию `stabilityai/stable-diffusion-xl-base-1.0`)
-- (опционально) `HF_PROVIDER` — провайдер (по умолчанию `hf-inference`)
+- (опционально) `HF_TEXT_TO_IMAGE_MODEL` — модель для text-to-image (по умолчанию `runwayml/stable-diffusion-v1-5`)
+- (опционально) `HF_ENDPOINT_URL` — явный endpoint Hugging Face Inference API (если у модели проблемы с provider mapping)
 
 ## Команды
 

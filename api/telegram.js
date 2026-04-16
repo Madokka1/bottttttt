@@ -73,17 +73,19 @@ async function generateImage(prompt) {
   const hfToken = process.env.HF_TOKEN || process.env.HUGGINGFACE_TOKEN;
   if (!hfToken) throw new Error("HF_TOKEN is not set");
 
-  const model =
-    process.env.HF_TEXT_TO_IMAGE_MODEL || "stabilityai/stable-diffusion-xl-base-1.0";
-  const provider = process.env.HF_PROVIDER || "hf-inference";
+  const model = process.env.HF_TEXT_TO_IMAGE_MODEL || "runwayml/stable-diffusion-v1-5";
+  const endpointUrl =
+    process.env.HF_ENDPOINT_URL ||
+    process.env.HF_INFERENCE_ENDPOINT_URL ||
+    `https://api-inference.huggingface.co/models/${model}`;
 
   const { InferenceClient } = await import("@huggingface/inference");
   const client = new InferenceClient(hfToken);
 
   // Returns a Blob in Node 18+
   return await client.textToImage({
-    provider,
-    model,
+    // Use explicit endpoint to avoid provider-mapping lookups (which may be missing for some models)
+    endpointUrl,
     inputs: prompt,
     // Keep it fast for serverless timeouts / free inference
     parameters: { num_inference_steps: 5 }
