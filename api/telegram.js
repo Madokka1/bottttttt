@@ -244,13 +244,29 @@ async function stylizePhoto({ req, fileId }) {
   const inputUrl = signProxyUrl({ req, fileId });
 
   const baseUrl = getPollinationsBaseUrl();
-  const model = (process.env.POLLINATIONS_EDIT_MODEL || "kontext").trim();
-  const url = new URL(`${baseUrl}/prompt/${encodeURIComponent(prompt)}`);
-  url.searchParams.set("model", model);
-  url.searchParams.set("image", inputUrl);
-  url.searchParams.set("nologo", "true");
+  const models =
+    parseCommaList(process.env.POLLINATIONS_EDIT_MODELS).length > 0
+      ? parseCommaList(process.env.POLLINATIONS_EDIT_MODELS)
+      : [(process.env.POLLINATIONS_EDIT_MODEL || "flux").trim()].filter(Boolean);
 
-  return await pollinationsFetchImage(url);
+  let lastErr;
+  for (const model of models) {
+    const url = new URL(`${baseUrl}/prompt/${encodeURIComponent(prompt)}`);
+    url.searchParams.set("model", model);
+    url.searchParams.set("image", inputUrl);
+    url.searchParams.set("nologo", "true");
+
+    try {
+      return await pollinationsFetchImage(url);
+    } catch (err) {
+      lastErr = err;
+      const body = typeof err?.httpBody === "string" ? err.httpBody : "";
+      // Some models are gated behind enter.pollinations.ai (paid).
+      if (body.includes("only available on enter.pollinations.ai")) continue;
+      throw err;
+    }
+  }
+  throw lastErr ?? new Error("Pollinations request failed");
 }
 
 module.exports = async (req, res) => {
@@ -389,4 +405,3 @@ module.exports = async (req, res) => {
     return sendJson(res, 200, { ok: false });
   }
 };
-

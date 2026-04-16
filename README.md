@@ -11,7 +11,8 @@
 - `TG_PROXY_SECRET` — секрет для проксирования Telegram-фото (нужно для обработки фото через внешнюю генерацию без утечки токена бота)
 - `POLLINATIONS_BASE_URL` — базовый URL Pollinations (по умолчанию `https://image.pollinations.ai`)
 - (опционально) `POLLINATIONS_TEXT_MODEL` — модель для `/t2i` (по умолчанию `flux`)
-- (опционально) `POLLINATIONS_EDIT_MODEL` — модель для обработки фото (по умолчанию `kontext`)
+- (опционально) `POLLINATIONS_EDIT_MODEL` — модель для обработки фото (по умолчанию `flux`)
+- (опционально) `POLLINATIONS_EDIT_MODELS` — список моделей для обработки фото (фолбэки через запятую)
 - (опционально) `POLLINATIONS_HTTP_TIMEOUT_MS` — таймаут запросов к Pollinations
 - `IMG_STYLE_PROMPT` — фиксированный промпт-стиль для обработки фото (по умолчанию `В мире дикой природы`)
 
