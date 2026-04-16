@@ -61,6 +61,15 @@ function isStartCommand(text) {
   return /^\/start(\s|$|@)/i.test(text.trim());
 }
 
+function mainMenuReplyMarkup() {
+  return {
+    inline_keyboard: [
+      [{ text: "Сгенерировать", callback_data: "generate" }],
+      [{ text: "Партнеры", callback_data: "partners" }]
+    ]
+  };
+}
+
 function parseCommand(text, command) {
   if (!text) return null;
   const trimmed = text.trim();
@@ -250,6 +259,15 @@ async function downloadTelegramPhotoAsBlob(fileId) {
   return await resp.blob();
 }
 
+async function answerCallbackQuery(id) {
+  if (!id) return;
+  try {
+    await telegramApi("answerCallbackQuery", { callback_query_id: id });
+  } catch (err) {
+    console.error("answerCallbackQuery failed:", err);
+  }
+}
+
 module.exports = async (req, res) => {
   try {
     if (req.method === "GET") {
@@ -270,6 +288,35 @@ module.exports = async (req, res) => {
 
     const update = await getJsonBody(req);
     const message = update?.message ?? update?.edited_message;
+    const callbackQuery = update?.callback_query;
+
+    if (callbackQuery?.id) {
+      await answerCallbackQuery(callbackQuery.id);
+      const chatId = callbackQuery?.message?.chat?.id;
+      const data = callbackQuery?.data;
+      const now = Date.now();
+
+      if (chatId && typeof data === "string") {
+        if (data === "generate") {
+          setPending(chatId, now);
+          const stylePrompt = (process.env.IMG_STYLE_PROMPT || "В мире дикой природы").trim();
+          await telegramApi("sendMessage", {
+            chat_id: chatId,
+            text:
+              "Пришли фото, я обработаю его в стиле:\n" +
+              stylePrompt +
+              "\n\nМожно просто отправить фото следующим сообщением.",
+            reply_markup: mainMenuReplyMarkup()
+          });
+        } else if (data === "partners") {
+          await telegramApi("sendMessage", {
+            chat_id: chatId,
+            text: "Партнеры: пока пусто (сюда добавим список/ссылки).",
+            reply_markup: mainMenuReplyMarkup()
+          });
+        }
+      }
+    }
 
     if (message?.chat?.id) {
       const chatId = message.chat.id;
@@ -280,8 +327,31 @@ module.exports = async (req, res) => {
         const text = message.text;
 
         if (isStartCommand(text)) {
-          await telegramApi("sendMessage", { chat_id: chatId, text: "привет" });
+          await telegramApi("sendMessage", {
+            chat_id: chatId,
+            text: "привет",
+            reply_markup: mainMenuReplyMarkup()
+          });
         } else {
+          if (text.trim() === "Сгенерировать") {
+            setPending(chatId, now);
+            const stylePrompt = (process.env.IMG_STYLE_PROMPT || "В мире дикой природы").trim();
+            await telegramApi("sendMessage", {
+              chat_id: chatId,
+              text:
+                "Пришли фото, я обработаю его в стиле:\n" +
+                stylePrompt +
+                "\n\nМожно просто отправить фото следующим сообщением.",
+              reply_markup: mainMenuReplyMarkup()
+            });
+          } else if (text.trim() === "Партнеры") {
+            await telegramApi("sendMessage", {
+              chat_id: chatId,
+              text: "Партнеры: пока пусто (сюда добавим список/ссылки).",
+              reply_markup: mainMenuReplyMarkup()
+            });
+          }
+
           const imgCmd = parseCommand(text, "img");
           if (imgCmd !== null) {
             // /img triggers photo stylization flow (fixed prompt)
