@@ -84,13 +84,18 @@ async function generateImage(prompt) {
   return await client.textToImage({
     provider,
     model,
-    inputs: prompt
+    inputs: prompt,
+    // Keep it fast for serverless timeouts / free inference
+    parameters: { num_inference_steps: 5 }
   });
 }
 
-async function blobToBuffer(blob) {
-  const ab = await blob.arrayBuffer();
-  return Buffer.from(ab);
+function guessFileNameFromMime(mimeType) {
+  const t = (mimeType || "").toLowerCase();
+  if (t.includes("png")) return "image.png";
+  if (t.includes("jpeg") || t.includes("jpg")) return "image.jpg";
+  if (t.includes("webp")) return "image.webp";
+  return "image.bin";
 }
 
 function sendJson(res, statusCode, payload) {
@@ -140,19 +145,30 @@ module.exports = async (req, res) => {
               text: "Генерирую изображение…"
             });
 
-            const imageBlob = await generateImage(prompt);
-            const imageBuffer = await blobToBuffer(imageBlob);
+            try {
+              const imageBlob = await generateImage(prompt);
+              const fileName = guessFileNameFromMime(imageBlob.type);
 
-            const form = new FormData();
-            form.append("chat_id", String(chatId));
-            form.append(
-              "photo",
-              new Blob([imageBuffer], { type: "image/png" }),
-              "image.png"
-            );
-            form.append("caption", prompt.slice(0, 1024));
+              const form = new FormData();
+              form.append("chat_id", String(chatId));
+              form.append("photo", imageBlob, fileName);
+              form.append("caption", prompt.slice(0, 1024));
 
-            await telegramApiMultipart("sendPhoto", form);
+              await telegramApiMultipart("sendPhoto", form);
+            } catch (genErr) {
+              console.error("image generation failed:", genErr);
+              const msg =
+                genErr && typeof genErr.message === "string"
+                  ? genErr.message
+                  : String(genErr);
+              await telegramApi("sendMessage", {
+                chat_id: chatId,
+                text:
+                  "Не смог сгенерировать изображение.\n" +
+                  "Попробуй другой промпт или модель.\n\n" +
+                  `Ошибка: ${msg}`.slice(0, 3500)
+              });
+            }
           }
         }
       }
