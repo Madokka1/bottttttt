@@ -145,26 +145,9 @@ async function getSubscriptionStatus(channelUsername, userId) {
 }
 
 async function checkRequiredSubscriptions(userId) {
-  const channels = parseRequiredChannels();
-  if (channels.length === 0) return { ok: true, channels: [] };
-
-  const results = [];
-  for (const channel of channels) {
-    try {
-      const status = await getSubscriptionStatus(channel, userId);
-      results.push({ channel, status, ok: isSubscribedStatus(status) });
-    } catch (err) {
-      // Most common reasons:
-      // - bot is not an admin in the channel
-      // - bot is not a member of the channel
-      // - channel username is wrong
-      console.error("getChatMember failed:", channel, err);
-      results.push({ channel, status: "unknown", ok: false, error: err });
-    }
-  }
-
-  const ok = results.every((r) => r.ok);
-  return { ok, channels: results };
+  void userId;
+  // Temporarily disabled: always allow.
+  return { ok: true, channels: [] };
 }
 
 function partnersText(channelsStatus) {
