@@ -38,10 +38,59 @@ async function telegramApi(method, payload) {
   return json.result;
 }
 
+async function telegramApiMultipart(method, formData) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set");
+
+  const resp = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+    method: "POST",
+    body: formData
+  });
+
+  const json = await resp.json().catch(() => null);
+  if (!resp.ok || !json?.ok) {
+    const details = json ? JSON.stringify(json) : String(resp.status);
+    throw new Error(`Telegram API error: ${details}`);
+  }
+  return json.result;
+}
+
 function isStartCommand(text) {
   if (!text) return false;
   // /start or /start <payload> or /start@botname
   return /^\/start(\s|$|@)/i.test(text.trim());
+}
+
+function parseImgCommand(text) {
+  if (!text) return null;
+  const trimmed = text.trim();
+  const match = trimmed.match(/^\/img(?:@[^\s]+)?(?:\s+([\s\S]+))?$/i);
+  if (!match) return null;
+  return (match[1] ?? "").trim();
+}
+
+async function generateImage(prompt) {
+  const hfToken = process.env.HF_TOKEN || process.env.HUGGINGFACE_TOKEN;
+  if (!hfToken) throw new Error("HF_TOKEN is not set");
+
+  const model =
+    process.env.HF_TEXT_TO_IMAGE_MODEL || "stabilityai/stable-diffusion-xl-base-1.0";
+  const provider = process.env.HF_PROVIDER || "hf-inference";
+
+  const { InferenceClient } = await import("@huggingface/inference");
+  const client = new InferenceClient(hfToken);
+
+  // Returns a Blob in Node 18+
+  return await client.textToImage({
+    provider,
+    model,
+    inputs: prompt
+  });
+}
+
+async function blobToBuffer(blob) {
+  const ab = await blob.arrayBuffer();
+  return Buffer.from(ab);
 }
 
 function sendJson(res, statusCode, payload) {
@@ -71,11 +120,42 @@ module.exports = async (req, res) => {
     const update = await getJsonBody(req);
     const message = update?.message ?? update?.edited_message;
 
-    if (message?.chat?.id && isStartCommand(message.text)) {
-      await telegramApi("sendMessage", {
-        chat_id: message.chat.id,
-        text: "привет"
-      });
+    if (message?.chat?.id && typeof message.text === "string") {
+      const chatId = message.chat.id;
+      const text = message.text;
+
+      if (isStartCommand(text)) {
+        await telegramApi("sendMessage", { chat_id: chatId, text: "привет" });
+      } else {
+        const prompt = parseImgCommand(text);
+        if (prompt !== null) {
+          if (!prompt) {
+            await telegramApi("sendMessage", {
+              chat_id: chatId,
+              text: "Использование: /img <что нарисовать>"
+            });
+          } else {
+            await telegramApi("sendMessage", {
+              chat_id: chatId,
+              text: "Генерирую изображение…"
+            });
+
+            const imageBlob = await generateImage(prompt);
+            const imageBuffer = await blobToBuffer(imageBlob);
+
+            const form = new FormData();
+            form.append("chat_id", String(chatId));
+            form.append(
+              "photo",
+              new Blob([imageBuffer], { type: "image/png" }),
+              "image.png"
+            );
+            form.append("caption", prompt.slice(0, 1024));
+
+            await telegramApiMultipart("sendPhoto", form);
+          }
+        }
+      }
     }
 
     return sendJson(res, 200, { ok: true });

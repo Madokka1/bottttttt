@@ -6,12 +6,20 @@
 
 - `TELEGRAM_BOT_TOKEN` — токен от `@BotFather`
 - (опционально) `TELEGRAM_WEBHOOK_SECRET` — секрет для проверки заголовка `X-Telegram-Bot-Api-Secret-Token`
+- `HF_TOKEN` — токен Hugging Face (нужен для генерации картинок командой `/img`)
+- (опционально) `HF_TEXT_TO_IMAGE_MODEL` — модель для text-to-image (по умолчанию `stabilityai/stable-diffusion-xl-base-1.0`)
+- (опционально) `HF_PROVIDER` — провайдер (по умолчанию `hf-inference`)
+
+## Команды
+
+- `/start` → `привет`
+- `/img <промпт>` → генерирует картинку и отправляет её
 
 ## Деплой на Vercel
 
 1. Залей репозиторий в GitHub/GitLab/Bitbucket.
 2. Импортируй проект в Vercel.
-3. В **Project Settings → Environment Variables** добавь `TELEGRAM_BOT_TOKEN` (и при желании `TELEGRAM_WEBHOOK_SECRET`).
+3. В **Project Settings → Environment Variables** добавь `TELEGRAM_BOT_TOKEN`, `HF_TOKEN` (и при желании `TELEGRAM_WEBHOOK_SECRET`).
 4. Задеплой.
 
 Webhook URL будет таким:
@@ -37,4 +45,3 @@ npm run set-webhook -- "https://<твое-имя-проекта>.vercel.app/api/
 `https://<твое-имя-проекта>.vercel.app/api/telegram`
 
 Должно вернуть `{ "ok": true, "service": "telegram-webhook" }`.
-
