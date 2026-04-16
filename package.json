@@ -1,0 +1,14 @@
+{
+  "name": "telegram-bot-vercel",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Minimal Telegram bot webhook for Vercel",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "set-webhook": "node scripts/setWebhook.mjs"
+  }
+}
+
