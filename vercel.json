@@ -2,7 +2,9 @@
   "functions": {
     "api/telegram.js": {
       "maxDuration": 60
+    },
+    "api/tg-proxy.js": {
+      "maxDuration": 60
     }
   }
 }
-
