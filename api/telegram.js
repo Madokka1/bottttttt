@@ -208,6 +208,16 @@ function withTimeout(ms) {
   return { controller, timeout };
 }
 
+function getHordeTimeoutMsForRequest({ path, method }) {
+  const defaultTimeout = Number(process.env.HORDE_HTTP_TIMEOUT_MS || 45000);
+  const submitTimeout = Number(process.env.HORDE_SUBMIT_HTTP_TIMEOUT_MS || defaultTimeout);
+  const checkTimeout = Number(process.env.HORDE_CHECK_HTTP_TIMEOUT_MS || 20000);
+
+  if (path === "/generate/async" && method === "POST") return submitTimeout;
+  if (path.startsWith("/generate/check/") || path.startsWith("/generate/status/")) return checkTimeout;
+  return defaultTimeout;
+}
+
 const HORDE_JOB_TTL_MS = 60 * 60 * 1000;
 const hordeJobMetaById = new Map();
 
@@ -249,7 +259,8 @@ async function hordeFetch(path, init) {
   for (const baseUrl of baseUrls) {
     const url = `${baseUrl}${path}`;
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      const { controller, timeout } = withTimeout(Number(process.env.HORDE_HTTP_TIMEOUT_MS || 20000));
+      const timeoutMs = getHordeTimeoutMsForRequest({ path, method });
+      const { controller, timeout } = withTimeout(timeoutMs);
       try {
         const resp = await fetch(url, { ...init, headers, signal: controller.signal });
         const json = await resp.json().catch(() => null);
@@ -274,8 +285,18 @@ async function hordeFetch(path, init) {
         }
         return json;
       } catch (err) {
-        lastErr = err;
         const isAbort = err?.name === "AbortError";
+        if (isAbort) {
+          const wrapped = new Error("This operation was aborted");
+          wrapped.name = "AbortError";
+          wrapped.httpStatus = 408;
+          wrapped.httpUrl = url;
+          wrapped.httpBody = { timeoutMs };
+          lastErr = wrapped;
+          err = wrapped;
+        } else {
+          lastErr = err;
+        }
         const transient = isAbort || err?.httpStatus === 503 || err?.httpStatus === 504 || err?.httpStatus === 502;
         if (method === "GET" && transient && attempt < maxRetries) {
           await sleep(500 * (attempt + 1));
@@ -317,7 +338,7 @@ function formatHttpError(err) {
   const extra = bodyText ? `\n${bodyText}` : "";
   const hint =
     isAbort
-      ? "\n\nПодсказка: запрос к AI Horde превысил таймаут. Увеличь `HORDE_HTTP_TIMEOUT_MS` (например до 30000) и попробуй снова."
+      ? "\n\nПодсказка: запрос к AI Horde превысил таймаут. Увеличь `HORDE_SUBMIT_HTTP_TIMEOUT_MS` (например до 60000) и попробуй снова."
       : status === 429
       ? "\n\nПодсказка: лимит AI Horde исчерпан, попробуй через минуту или используй свой HORDE_API_KEY."
       : status === 503
