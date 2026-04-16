@@ -87,6 +87,15 @@ function getPollinationsBaseUrl() {
   return (process.env.POLLINATIONS_BASE_URL || "https://image.pollinations.ai").replace(/\/+$/, "");
 }
 
+function parseCommaList(value) {
+  const raw = (value || "").trim();
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 function mainMenuReplyMarkup() {
   return {
     keyboard: [[{ text: "Сгенерировать" }, { text: "Партнеры" }]],
