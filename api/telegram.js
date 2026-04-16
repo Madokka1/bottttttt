@@ -55,6 +55,14 @@ async function telegramApiMultipart(method, formData) {
   return json.result;
 }
 
+function getGeminiApiKey() {
+  const key =
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_AI_STUDIO_API_KEY ||
+    process.env.GOOGLE_API_KEY;
+  return typeof key === "string" ? key.trim() : "";
+}
+
 function isStartCommand(text) {
   if (!text) return false;
   // /start or /start <payload> or /start@botname
@@ -175,7 +183,70 @@ function partnersText(channelsStatus) {
   return lines.join("\n");
 }
 
+async function blobToBase64(blob) {
+  const ab = await blob.arrayBuffer();
+  return Buffer.from(ab).toString("base64");
+}
+
+async function geminiGenerateImage({ prompt, inputImageBlob }) {
+  const apiKey = getGeminiApiKey();
+  if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
+
+  const model = (process.env.GEMINI_IMAGE_MODEL || "gemini-2.5-flash-image").trim();
+
+  const parts = [];
+  if (prompt) parts.push({ text: prompt });
+  if (inputImageBlob) {
+    const base64 = await blobToBase64(inputImageBlob);
+    parts.push({
+      inlineData: {
+        mimeType: inputImageBlob.type || "image/jpeg",
+        data: base64
+      }
+    });
+  }
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+    model
+  )}:generateContent?key=${encodeURIComponent(apiKey)}`;
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ role: "user", parts }]
+    })
+  });
+
+  const json = await resp.json().catch(() => null);
+  if (!resp.ok) {
+    const details = json ? JSON.stringify(json) : String(resp.status);
+    const err = new Error(`Gemini API error: ${details}`);
+    err.httpStatus = resp.status;
+    err.httpBody = json ?? details;
+    throw err;
+  }
+
+  const candidate = json?.candidates?.[0];
+  const outParts = candidate?.content?.parts;
+  if (!Array.isArray(outParts)) throw new Error("Gemini API: missing candidates[0].content.parts");
+
+  const imgPart = outParts.find((p) => p?.inlineData?.data);
+  if (!imgPart) {
+    const textPart = outParts.find((p) => typeof p?.text === "string")?.text;
+    throw new Error(`Gemini API: no image returned${textPart ? `: ${textPart}` : ""}`);
+  }
+
+  const mimeType = imgPart.inlineData.mimeType || "image/png";
+  const bytes = Buffer.from(imgPart.inlineData.data, "base64");
+  return new Blob([bytes], { type: mimeType });
+}
+
 async function generateImage(prompt) {
+  if (getGeminiApiKey()) {
+    return await geminiGenerateImage({ prompt });
+  }
+
   let hfToken = process.env.HF_TOKEN || process.env.HUGGINGFACE_TOKEN;
   if (!hfToken) throw new Error("HF_TOKEN is not set");
   hfToken = hfToken.trim();
@@ -216,6 +287,15 @@ async function generateImage(prompt) {
 }
 
 async function stylizePhoto(inputImageBlob) {
+  if (getGeminiApiKey()) {
+    const stylePrompt = (process.env.IMG_STYLE_PROMPT || "В мире дикой природы").trim();
+    const prompt =
+      "Отредактируй изображение в стилистике: " +
+      stylePrompt +
+      ". Сохрани композицию, но сделай общий стиль соответствующим.";
+    return await geminiGenerateImage({ prompt, inputImageBlob });
+  }
+
   let hfToken = process.env.HF_TOKEN || process.env.HUGGINGFACE_TOKEN;
   if (!hfToken) throw new Error("HF_TOKEN is not set");
   hfToken = hfToken.trim();
@@ -274,9 +354,9 @@ function guessFileNameFromMime(mimeType) {
 }
 
 function formatHfError(err) {
-  const status = err?.httpResponse?.status;
+  const status = err?.httpResponse?.status ?? err?.httpStatus;
   const requestId = err?.httpResponse?.requestId;
-  const body = err?.httpResponse?.body;
+  const body = err?.httpResponse?.body ?? err?.httpBody;
   const url = err?.httpRequest?.url;
 
   const parts = [];
