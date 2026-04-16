@@ -80,7 +80,10 @@ async function generateImage(prompt) {
     );
   }
 
-  const model = process.env.HF_TEXT_TO_IMAGE_MODEL || "runwayml/stable-diffusion-v1-5";
+  // Pick a model that is actually served by HF Inference (catalog changes over time).
+  // Defaulting to a commonly-available text-to-image model on hf-inference.
+  const model =
+    process.env.HF_TEXT_TO_IMAGE_MODEL || "black-forest-labs/FLUX.1-schnell";
   const endpointUrl =
     process.env.HF_ENDPOINT_URL ||
     process.env.HF_INFERENCE_ENDPOINT_URL ||
@@ -89,13 +92,18 @@ async function generateImage(prompt) {
   const { InferenceClient } = await import("@huggingface/inference");
   const client = new InferenceClient(hfToken);
 
+  const isStableDiffusionFamily =
+    model.includes("stable-diffusion") ||
+    model.includes("sdxl") ||
+    model.startsWith("stabilityai/");
+
   // Returns a Blob in Node 18+
   return await client.textToImage({
     // Use explicit endpoint to avoid provider-mapping lookups (which may be missing for some models)
     endpointUrl,
     inputs: prompt,
-    // Keep it fast for serverless timeouts / free inference
-    parameters: { num_inference_steps: 5 },
+    // Keep it fast for serverless timeouts / free inference (only for SD-like models)
+    ...(isStableDiffusionFamily ? { parameters: { num_inference_steps: 5 } } : {}),
     // HF Inference API options (helps with cold starts)
     options: { wait_for_model: true, use_cache: true }
   });
