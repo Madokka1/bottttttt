@@ -249,7 +249,7 @@ async function hordeFetch(path, init) {
   for (const baseUrl of baseUrls) {
     const url = `${baseUrl}${path}`;
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      const { controller, timeout } = withTimeout(Number(process.env.HORDE_HTTP_TIMEOUT_MS || 8000));
+      const { controller, timeout } = withTimeout(Number(process.env.HORDE_HTTP_TIMEOUT_MS || 20000));
       try {
         const resp = await fetch(url, { ...init, headers, signal: controller.signal });
         const json = await resp.json().catch(() => null);
@@ -297,6 +297,7 @@ function formatHttpError(err) {
   const url = err?.httpUrl;
   const body = err?.httpBody;
   const msg = typeof err?.message === "string" ? err.message : String(err);
+  const isAbort = err?.name === "AbortError" || /aborted/i.test(msg);
 
   let bodyText = "";
   if (typeof body === "string") bodyText = body;
@@ -315,7 +316,9 @@ function formatHttpError(err) {
   const header = `${typeof status === "number" ? `HTTP ${status}` : ""}${url ? ` | ${url}` : ""}`.trim();
   const extra = bodyText ? `\n${bodyText}` : "";
   const hint =
-    status === 429
+    isAbort
+      ? "\n\nПодсказка: запрос к AI Horde превысил таймаут. Увеличь `HORDE_HTTP_TIMEOUT_MS` (например до 30000) и попробуй снова."
+      : status === 429
       ? "\n\nПодсказка: лимит AI Horde исчерпан, попробуй через минуту или используй свой HORDE_API_KEY."
       : status === 503
         ? "\n\nПодсказка: AI Horde сейчас перегружен/недоступен. Попробуй ещё раз позже."
