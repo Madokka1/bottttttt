@@ -55,14 +55,6 @@ async function telegramApiMultipart(method, formData) {
   return json.result;
 }
 
-function getGeminiApiKey() {
-  const key =
-    process.env.GEMINI_API_KEY ||
-    process.env.GOOGLE_AI_STUDIO_API_KEY ||
-    process.env.GOOGLE_API_KEY;
-  return typeof key === "string" ? key.trim() : "";
-}
-
 function isStartCommand(text) {
   if (!text) return false;
   // /start or /start <payload> or /start@botname
@@ -171,126 +163,7 @@ async function blobToBase64(blob) {
   return Buffer.from(ab).toString("base64");
 }
 
-async function geminiGenerateImage({ prompt, inputImageBlob }) {
-  const apiKey = getGeminiApiKey();
-  if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
-
-  const model = (process.env.GEMINI_IMAGE_MODEL || "gemini-2.5-flash-image").trim();
-
-  const parts = [];
-  if (prompt) parts.push({ text: prompt });
-  if (inputImageBlob) {
-    const base64 = await blobToBase64(inputImageBlob);
-    parts.push({
-      inlineData: {
-        mimeType: inputImageBlob.type || "image/jpeg",
-        data: base64
-      }
-    });
-  }
-
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
-    model
-  )}:generateContent?key=${encodeURIComponent(apiKey)}`;
-
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ role: "user", parts }]
-    })
-  });
-
-  const json = await resp.json().catch(() => null);
-  if (!resp.ok) {
-    const details = json ? JSON.stringify(json) : String(resp.status);
-    const err = new Error(`Gemini API error: ${details}`);
-    err.httpStatus = resp.status;
-    err.httpBody = json ?? details;
-    throw err;
-  }
-
-  const candidate = json?.candidates?.[0];
-  const outParts = candidate?.content?.parts;
-  if (!Array.isArray(outParts)) throw new Error("Gemini API: missing candidates[0].content.parts");
-
-  const imgPart = outParts.find((p) => p?.inlineData?.data);
-  if (!imgPart) {
-    const textPart = outParts.find((p) => typeof p?.text === "string")?.text;
-    throw new Error(`Gemini API: no image returned${textPart ? `: ${textPart}` : ""}`);
-  }
-
-  const mimeType = imgPart.inlineData.mimeType || "image/png";
-  const bytes = Buffer.from(imgPart.inlineData.data, "base64");
-  return new Blob([bytes], { type: mimeType });
-}
-
-function extractRetryAfterSeconds(err) {
-  const details = err?.httpBody?.error?.details;
-  if (!Array.isArray(details)) return null;
-  const retryInfo = details.find((d) => d?.["@type"]?.includes("google.rpc.RetryInfo"));
-  const delay = retryInfo?.retryDelay;
-  if (typeof delay !== "string") return null;
-  const match = delay.match(/^(\d+)s$/);
-  if (!match) return null;
-  return Number(match[1]);
-}
-
-function formatModelError(err) {
-  // Gemini errors we throw include httpStatus/httpBody
-  const status = err?.httpResponse?.status ?? err?.httpStatus;
-  const requestId = err?.httpResponse?.requestId;
-  const body = err?.httpResponse?.body ?? err?.httpBody;
-  const url = err?.httpRequest?.url;
-
-  const parts = [];
-  if (typeof status === "number") parts.push(`HTTP ${status}`);
-  if (typeof requestId === "string" && requestId) parts.push(`requestId=${requestId}`);
-  if (typeof url === "string" && url) parts.push(url);
-
-  let bodyText = "";
-  if (typeof body === "string") bodyText = body;
-  else if (body && typeof body === "object") {
-    const e = body?.error;
-    const candidate =
-      typeof e?.message === "string"
-        ? e.message
-        : typeof body.error === "string"
-          ? body.error
-          : typeof body.message === "string"
-            ? body.message
-            : typeof body.detail === "string"
-              ? body.detail
-              : "";
-    bodyText = candidate || JSON.stringify(body);
-  }
-
-  const msg = typeof err?.message === "string" ? err.message : String(err);
-  const extra = bodyText ? `\n${bodyText}` : "";
-  const header = parts.length ? `${parts.join(" | ")}\n` : "";
-
-  const retryAfter = extractRetryAfterSeconds(err);
-  const hint429 =
-    status === 429
-      ? `\n\nПодсказка: лимит/квота исчерпаны. ${retryAfter ? `Попробуй снова через ~${retryAfter} сек.` : ""} Если это Google AI Studio (Gemini) — включи биллинг/план и проверь квоты в консоли.`
-      : "";
-  const hint401 =
-    status === 401
-      ? "\n\nПодсказка: проверь, что `HF_TOKEN` — это Hugging Face Access Token вида `hf_...` (Settings → Access Tokens) и что в значении нет лишнего `Bearer ` / пробелов."
-      : "";
-  const hint402 =
-    status === 402
-      ? "\n\nПодсказка: это платный inference-провайдер. Для работы нужно пополнить Hugging Face credits (Billing) или выбрать/подключить другого провайдера."
-      : "";
-
-  return (header + msg + extra + hint429 + hint401 + hint402).slice(0, 3500);
-}
-
 async function generateImage(prompt) {
-  if (getGeminiApiKey()) {
-    return await geminiGenerateImage({ prompt });
-  }
-
   let hfToken = process.env.HF_TOKEN || process.env.HUGGINGFACE_TOKEN;
   if (!hfToken) throw new Error("HF_TOKEN is not set");
   hfToken = hfToken.trim();
@@ -331,15 +204,6 @@ async function generateImage(prompt) {
 }
 
 async function stylizePhoto(inputImageBlob) {
-  if (getGeminiApiKey()) {
-    const stylePrompt = (process.env.IMG_STYLE_PROMPT || "В мире дикой природы").trim();
-    const prompt =
-      "Отредактируй изображение в стилистике: " +
-      stylePrompt +
-      ". Сохрани композицию, но сделай общий стиль соответствующим.";
-    return await geminiGenerateImage({ prompt, inputImageBlob });
-  }
-
   let hfToken = process.env.HF_TOKEN || process.env.HUGGINGFACE_TOKEN;
   if (!hfToken) throw new Error("HF_TOKEN is not set");
   hfToken = hfToken.trim();
@@ -351,10 +215,9 @@ async function stylizePhoto(inputImageBlob) {
   }
 
   const stylePrompt = (process.env.IMG_STYLE_PROMPT || "В мире дикой природы").trim();
-  // This model is mapped to multiple Inference Providers (fal-ai / replicate / wavespeed) via HF router.
-  // It supports image-to-image edits driven by a text prompt.
+  // FireRed Image Edit (via Inference Providers).
   const model =
-    process.env.HF_IMAGE_TO_IMAGE_MODEL || "black-forest-labs/FLUX.1-Kontext-dev";
+    process.env.HF_IMAGE_TO_IMAGE_MODEL || "FireRedTeam/FireRed-Image-Edit-1.0";
 
   const { InferenceClient } = await import("@huggingface/inference");
   const client = new InferenceClient(hfToken);
@@ -362,7 +225,7 @@ async function stylizePhoto(inputImageBlob) {
   const providersCsv = (process.env.HF_IMAGE_PROVIDERS || "").trim();
   const providers = providersCsv
     ? providersCsv.split(",").map((p) => p.trim()).filter(Boolean)
-    : ["wavespeed", "replicate", "fal-ai"];
+    : ["fal-ai"];
 
   let lastErr;
   for (const provider of providers) {
@@ -398,7 +261,42 @@ function guessFileNameFromMime(mimeType) {
 }
 
 function formatHfError(err) {
-  return formatModelError(err);
+  const status = err?.httpResponse?.status;
+  const requestId = err?.httpResponse?.requestId;
+  const body = err?.httpResponse?.body;
+  const url = err?.httpRequest?.url;
+
+  const parts = [];
+  if (typeof status === "number") parts.push(`HTTP ${status}`);
+  if (typeof requestId === "string" && requestId) parts.push(`requestId=${requestId}`);
+  if (typeof url === "string" && url) parts.push(url);
+
+  let bodyText = "";
+  if (typeof body === "string") bodyText = body;
+  else if (body && typeof body === "object") {
+    const candidate =
+      typeof body.error === "string"
+        ? body.error
+        : typeof body.message === "string"
+          ? body.message
+          : typeof body.detail === "string"
+            ? body.detail
+            : "";
+    bodyText = candidate || JSON.stringify(body);
+  }
+
+  const msg = typeof err?.message === "string" ? err.message : String(err);
+  const extra = bodyText ? `\n${bodyText}` : "";
+  const header = parts.length ? `${parts.join(" | ")}\n` : "";
+
+  const hint =
+    status === 401
+      ? "\n\nПодсказка: проверь, что `HF_TOKEN` — это Hugging Face Access Token вида `hf_...` (Settings → Access Tokens) и что в значении нет лишнего `Bearer ` / пробелов."
+      : status === 402
+        ? "\n\nПодсказка: это платный inference-провайдер. Для работы нужно пополнить Hugging Face credits (Billing) или выбрать/подключить другого провайдера."
+      : "";
+
+  return (header + msg + extra + hint).slice(0, 3500);
 }
 
 function sendJson(res, statusCode, payload) {
