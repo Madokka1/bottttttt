@@ -26,7 +26,8 @@ function getHordeApiKey() {
 }
 
 function getHordeBaseUrl() {
-  return (process.env.HORDE_BASE_URL || "https://stablehorde.net/api/v2").replace(/\/+$/, "");
+  // Official API base (SDK default): https://aihorde.net/api/ + /v2/...
+  return (process.env.HORDE_BASE_URL || "https://aihorde.net/api/v2").replace(/\/+$/, "");
 }
 
 function hordeCheckReplyMarkup(jobId) {
@@ -191,6 +192,12 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function withTimeout(ms) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ms);
+  return { controller, timeout };
+}
+
 const HORDE_JOB_TTL_MS = 60 * 60 * 1000;
 const hordeJobMetaById = new Map();
 
@@ -219,17 +226,50 @@ async function hordeFetch(path, init) {
     apikey: getHordeApiKey(),
     "content-type": "application/json"
   };
-  const resp = await fetch(url, { ...init, headers });
-  const json = await resp.json().catch(() => null);
-  if (!resp.ok) {
-    const details = json ? JSON.stringify(json) : String(resp.status);
-    const err = new Error(`AI Horde error: ${details}`);
-    err.httpStatus = resp.status;
-    err.httpBody = json ?? details;
-    err.httpUrl = url;
-    throw err;
+
+  const method = (init?.method || "GET").toUpperCase();
+  const maxRetries =
+    typeof init?.retries === "number"
+      ? init.retries
+      : method === "GET"
+        ? 3
+        : 0;
+
+  let lastErr;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const { controller, timeout } = withTimeout(Number(process.env.HORDE_HTTP_TIMEOUT_MS || 8000));
+    try {
+      const resp = await fetch(url, { ...init, headers, signal: controller.signal });
+      const json = await resp.json().catch(() => null);
+      if (!resp.ok) {
+        const details = json ? JSON.stringify(json) : String(resp.status);
+        const err = new Error(`AI Horde error: ${details}`);
+        err.httpStatus = resp.status;
+        err.httpBody = json ?? details;
+        err.httpUrl = url;
+        lastErr = err;
+
+        // Retry on transient errors for GETs
+        if (method === "GET" && [502, 503, 504].includes(resp.status) && attempt < maxRetries) {
+          await sleep(500 * (attempt + 1));
+          continue;
+        }
+        throw err;
+      }
+      return json;
+    } catch (err) {
+      lastErr = err;
+      const isAbort = err?.name === "AbortError";
+      if (method === "GET" && (isAbort || err?.httpStatus === 503) && attempt < maxRetries) {
+        await sleep(500 * (attempt + 1));
+        continue;
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeout);
+    }
   }
-  return json;
+  throw lastErr;
 }
 
 function formatHttpError(err) {
@@ -257,6 +297,8 @@ function formatHttpError(err) {
   const hint =
     status === 429
       ? "\n\nПодсказка: лимит AI Horde исчерпан, попробуй через минуту или используй свой HORDE_API_KEY."
+      : status === 503
+        ? "\n\nПодсказка: AI Horde сейчас перегружен/недоступен. Попробуй ещё раз позже."
       : "";
   return `${header ? header + "\n" : ""}${msg}${extra}${hint}`.slice(0, 3500);
 }
@@ -359,11 +401,11 @@ async function hordeSubmit({ prompt, sourceImageBlob }) {
 }
 
 async function hordeCheck(id) {
-  return await hordeFetch(`/generate/check/${id}`, { method: "GET" });
+  return await hordeFetch(`/generate/check/${id}`, { method: "GET", retries: 3 });
 }
 
 async function hordeGetResultBlob(id) {
-  const status = await hordeFetch(`/generate/status/${id}`, { method: "GET" });
+  const status = await hordeFetch(`/generate/status/${id}`, { method: "GET", retries: 3 });
   const gen = status?.generations?.[0];
   const b64 = gen?.img;
   if (!b64) throw new Error("AI Horde: generation finished but no image data");
@@ -597,18 +639,22 @@ module.exports = async (req, res) => {
                   const jobId = await hordeSubmit({ prompt: t2iPrompt });
                   setHordeJobMeta(jobId, { chatId, caption: t2iPrompt });
 
-                  // short poll to fit serverless timeouts
-                  for (let i = 0; i < 3; i++) {
+                  // Always send a "check" button quickly, then optionally deliver if ready.
+                  let check = null;
+                  try {
+                    check = await hordeCheck(jobId);
+                  } catch {
+                    // ignore; Horde can be flaky
+                  }
+                  await telegramApi("sendMessage", {
+                    chat_id: chatId,
+                    text: (check ? describeHordeCheck(check) : "Задача поставлена в очередь…") + "\nНажми «Проверить», когда будет готово.",
+                    reply_markup: hordeCheckReplyMarkup(jobId)
+                  });
+
+                  for (let i = 0; i < 2; i++) {
                     const result = await tryDeliverHordeJob({ chatId, jobId, caption: t2iPrompt });
                     if (result.delivered) break;
-                    if (i === 2) {
-                      await telegramApi("sendMessage", {
-                        chat_id: chatId,
-                        text: describeHordeCheck(result.check) + "\nНажми «Проверить», когда будет готово.",
-                        reply_markup: hordeCheckReplyMarkup(jobId)
-                      });
-                      break;
-                    }
                     await sleep(1500);
                   }
                 } catch (genErr) {
@@ -653,17 +699,21 @@ module.exports = async (req, res) => {
             const jobId = await hordeSubmit({ prompt, sourceImageBlob: inputBlob });
             setHordeJobMeta(jobId, { chatId, caption: stylePrompt });
 
-            for (let i = 0; i < 3; i++) {
+            let check = null;
+            try {
+              check = await hordeCheck(jobId);
+            } catch {
+              // ignore; Horde can be flaky
+            }
+            await telegramApi("sendMessage", {
+              chat_id: chatId,
+              text: (check ? describeHordeCheck(check) : "Задача поставлена в очередь…") + "\nНажми «Проверить», когда будет готово.",
+              reply_markup: hordeCheckReplyMarkup(jobId)
+            });
+
+            for (let i = 0; i < 2; i++) {
               const result = await tryDeliverHordeJob({ chatId, jobId, caption: stylePrompt });
               if (result.delivered) break;
-              if (i === 2) {
-                await telegramApi("sendMessage", {
-                  chat_id: chatId,
-                  text: describeHordeCheck(result.check) + "\nНажми «Проверить», когда будет готово.",
-                  reply_markup: hordeCheckReplyMarkup(jobId)
-                });
-                break;
-              }
               await sleep(1500);
             }
           } catch (err) {
