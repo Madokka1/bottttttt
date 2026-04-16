@@ -29,6 +29,12 @@ function getHordeBaseUrl() {
   return (process.env.HORDE_BASE_URL || "https://stablehorde.net/api/v2").replace(/\/+$/, "");
 }
 
+function hordeCheckReplyMarkup(jobId) {
+  return {
+    inline_keyboard: [[{ text: "Проверить", callback_data: `horde_check:${jobId}` }]]
+  };
+}
+
 async function telegramApi(method, payload) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set");
@@ -185,6 +191,27 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+const HORDE_JOB_TTL_MS = 60 * 60 * 1000;
+const hordeJobMetaById = new Map();
+
+function setHordeJobMeta(id, meta) {
+  const now = Date.now();
+  hordeJobMetaById.set(String(id), { ...meta, createdAt: now });
+  for (const [jobId, m] of hordeJobMetaById.entries()) {
+    if (!m?.createdAt || now - m.createdAt > HORDE_JOB_TTL_MS) hordeJobMetaById.delete(jobId);
+  }
+}
+
+function getHordeJobMeta(id) {
+  const meta = hordeJobMetaById.get(String(id));
+  if (!meta) return null;
+  if (!meta.createdAt || Date.now() - meta.createdAt > HORDE_JOB_TTL_MS) {
+    hordeJobMetaById.delete(String(id));
+    return null;
+  }
+  return meta;
+}
+
 async function hordeFetch(path, init) {
   const url = `${getHordeBaseUrl()}${path}`;
   const headers = {
@@ -294,6 +321,94 @@ async function hordeGenerate({ prompt, sourceImageBlob }) {
   throw err;
 }
 
+async function hordeSubmit({ prompt, sourceImageBlob }) {
+  const models = parseCommaList(process.env.HORDE_MODELS);
+  const steps = Number(process.env.HORDE_STEPS || 20);
+  const width = Number(process.env.HORDE_WIDTH || 512);
+  const height = Number(process.env.HORDE_HEIGHT || 512);
+  const denoisingStrength = Number(process.env.HORDE_DENOISING || 0.6);
+
+  const payload = {
+    prompt,
+    params: {
+      n: 1,
+      steps: Number.isFinite(steps) ? steps : 20,
+      width: Number.isFinite(width) ? width : 512,
+      height: Number.isFinite(height) ? height : 512
+    },
+    r2: false,
+    censor_nsfw: true,
+    trusted_workers: false
+  };
+
+  if (models.length) payload.models = models;
+  if (sourceImageBlob) {
+    payload.source_processing = "img2img";
+    payload.source_image = await blobToBase64(sourceImageBlob);
+    payload.params.denoising_strength = Number.isFinite(denoisingStrength) ? denoisingStrength : 0.6;
+  }
+
+  const submit = await hordeFetch("/generate/async", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+
+  const id = submit?.id;
+  if (!id) throw new Error("AI Horde: missing job id");
+  return id;
+}
+
+async function hordeCheck(id) {
+  return await hordeFetch(`/generate/check/${id}`, { method: "GET" });
+}
+
+async function hordeGetResultBlob(id) {
+  const status = await hordeFetch(`/generate/status/${id}`, { method: "GET" });
+  const gen = status?.generations?.[0];
+  const b64 = gen?.img;
+  if (!b64) throw new Error("AI Horde: generation finished but no image data");
+  const bytes = Buffer.from(b64, "base64");
+  return new Blob([bytes], { type: "image/webp" });
+}
+
+function describeHordeCheck(check) {
+  if (!check || typeof check !== "object") return "В очереди…";
+  const wait = typeof check.wait_time === "number" ? check.wait_time : null;
+  const queue = typeof check.queue_position === "number" ? check.queue_position : null;
+  const parts = [];
+  if (queue !== null) parts.push(`позиция: ${queue}`);
+  if (wait !== null) parts.push(`ожидание: ~${wait}с`);
+  return parts.length ? `В очереди (${parts.join(", ")})…` : "В очереди…";
+}
+
+async function answerCallbackQuery(id) {
+  if (!id) return;
+  try {
+    await telegramApi("answerCallbackQuery", { callback_query_id: id });
+  } catch (err) {
+    console.error("answerCallbackQuery failed:", err);
+  }
+}
+
+async function sendPhotoBlob(chatId, blob, caption) {
+  const fileName = guessFileNameFromMime(blob.type);
+  const form = new FormData();
+  form.append("chat_id", String(chatId));
+  form.append("photo", blob, fileName);
+  if (caption) form.append("caption", caption.slice(0, 1024));
+  await telegramApiMultipart("sendPhoto", form);
+}
+
+async function tryDeliverHordeJob({ chatId, jobId, caption }) {
+  const check = await hordeCheck(jobId);
+  if (check?.done === true) {
+    const blob = await hordeGetResultBlob(jobId);
+    await sendPhotoBlob(chatId, blob, caption);
+    return { delivered: true, check };
+  }
+  return { delivered: false, check };
+}
+
 async function generateImage(prompt) {
   return await hordeGenerate({ prompt });
 }
@@ -368,6 +483,36 @@ module.exports = async (req, res) => {
 
     const update = await getJsonBody(req);
     const message = update?.message ?? update?.edited_message;
+    const callbackQuery = update?.callback_query;
+
+    if (callbackQuery?.id) {
+      await answerCallbackQuery(callbackQuery.id);
+      const chatId = callbackQuery?.message?.chat?.id;
+      const data = callbackQuery?.data;
+
+      if (chatId && typeof data === "string" && data.startsWith("horde_check:")) {
+        const jobId = data.slice("horde_check:".length).trim();
+        try {
+          const meta = getHordeJobMeta(jobId);
+          const caption = meta?.caption || "";
+          const result = await tryDeliverHordeJob({ chatId, jobId, caption });
+          if (!result.delivered) {
+            await telegramApi("sendMessage", {
+              chat_id: chatId,
+              text: describeHordeCheck(result.check) + "\nНажми «Проверить» ещё раз через пару секунд.",
+              reply_markup: hordeCheckReplyMarkup(jobId)
+            });
+          }
+        } catch (err) {
+          console.error("horde check failed:", err);
+          await telegramApi("sendMessage", {
+            chat_id: chatId,
+            text: `Ошибка: ${formatHfError(err)}`
+          });
+        }
+      }
+    }
+
     if (message?.chat?.id) {
       const chatId = message.chat.id;
       const now = Date.now();
@@ -449,15 +594,23 @@ module.exports = async (req, res) => {
                 });
 
                 try {
-                  const imageBlob = await generateImage(t2iPrompt);
-                  const fileName = guessFileNameFromMime(imageBlob.type);
+                  const jobId = await hordeSubmit({ prompt: t2iPrompt });
+                  setHordeJobMeta(jobId, { chatId, caption: t2iPrompt });
 
-                  const form = new FormData();
-                  form.append("chat_id", String(chatId));
-                  form.append("photo", imageBlob, fileName);
-                  form.append("caption", t2iPrompt.slice(0, 1024));
-
-                  await telegramApiMultipart("sendPhoto", form);
+                  // short poll to fit serverless timeouts
+                  for (let i = 0; i < 3; i++) {
+                    const result = await tryDeliverHordeJob({ chatId, jobId, caption: t2iPrompt });
+                    if (result.delivered) break;
+                    if (i === 2) {
+                      await telegramApi("sendMessage", {
+                        chat_id: chatId,
+                        text: describeHordeCheck(result.check) + "\nНажми «Проверить», когда будет готово.",
+                        reply_markup: hordeCheckReplyMarkup(jobId)
+                      });
+                      break;
+                    }
+                    await sleep(1500);
+                  }
                 } catch (genErr) {
                   console.error("text-to-image failed:", genErr);
                   await telegramApi("sendMessage", {
@@ -491,15 +644,28 @@ module.exports = async (req, res) => {
 
           try {
             const inputBlob = await downloadTelegramPhotoAsBlob(fileId);
-            const outBlob = await stylizePhoto(inputBlob);
-            const fileName = guessFileNameFromMime(outBlob.type);
+            const stylePrompt = (process.env.IMG_STYLE_PROMPT || "В мире дикой природы").trim();
+            const prompt =
+              "Отредактируй изображение в стилистике: " +
+              stylePrompt +
+              ". Сохрани композицию, но сделай общий стиль соответствующим.";
 
-            const form = new FormData();
-            form.append("chat_id", String(chatId));
-            form.append("photo", outBlob, fileName);
-            form.append("caption", (process.env.IMG_STYLE_PROMPT || "В мире дикой природы").trim().slice(0, 1024));
+            const jobId = await hordeSubmit({ prompt, sourceImageBlob: inputBlob });
+            setHordeJobMeta(jobId, { chatId, caption: stylePrompt });
 
-            await telegramApiMultipart("sendPhoto", form);
+            for (let i = 0; i < 3; i++) {
+              const result = await tryDeliverHordeJob({ chatId, jobId, caption: stylePrompt });
+              if (result.delivered) break;
+              if (i === 2) {
+                await telegramApi("sendMessage", {
+                  chat_id: chatId,
+                  text: describeHordeCheck(result.check) + "\nНажми «Проверить», когда будет готово.",
+                  reply_markup: hordeCheckReplyMarkup(jobId)
+                });
+                break;
+              }
+              await sleep(1500);
+            }
           } catch (err) {
             console.error("photo stylization failed:", err);
             await telegramApi("sendMessage", {
