@@ -88,7 +88,9 @@ async function generateImage(prompt) {
     endpointUrl,
     inputs: prompt,
     // Keep it fast for serverless timeouts / free inference
-    parameters: { num_inference_steps: 5 }
+    parameters: { num_inference_steps: 5 },
+    // HF Inference API options (helps with cold starts)
+    options: { wait_for_model: true, use_cache: true }
   });
 }
 
@@ -98,6 +100,38 @@ function guessFileNameFromMime(mimeType) {
   if (t.includes("jpeg") || t.includes("jpg")) return "image.jpg";
   if (t.includes("webp")) return "image.webp";
   return "image.bin";
+}
+
+function formatHfError(err) {
+  const status = err?.httpResponse?.status;
+  const requestId = err?.httpResponse?.requestId;
+  const body = err?.httpResponse?.body;
+  const url = err?.httpRequest?.url;
+
+  const parts = [];
+  if (typeof status === "number") parts.push(`HTTP ${status}`);
+  if (typeof requestId === "string" && requestId) parts.push(`requestId=${requestId}`);
+  if (typeof url === "string" && url) parts.push(url);
+
+  let bodyText = "";
+  if (typeof body === "string") bodyText = body;
+  else if (body && typeof body === "object") {
+    const candidate =
+      typeof body.error === "string"
+        ? body.error
+        : typeof body.message === "string"
+          ? body.message
+          : typeof body.detail === "string"
+            ? body.detail
+            : "";
+    bodyText = candidate || JSON.stringify(body);
+  }
+
+  const msg = typeof err?.message === "string" ? err.message : String(err);
+  const extra = bodyText ? `\n${bodyText}` : "";
+  const header = parts.length ? `${parts.join(" | ")}\n` : "";
+
+  return (header + msg + extra).slice(0, 3500);
 }
 
 function sendJson(res, statusCode, payload) {
@@ -159,16 +193,12 @@ module.exports = async (req, res) => {
               await telegramApiMultipart("sendPhoto", form);
             } catch (genErr) {
               console.error("image generation failed:", genErr);
-              const msg =
-                genErr && typeof genErr.message === "string"
-                  ? genErr.message
-                  : String(genErr);
               await telegramApi("sendMessage", {
                 chat_id: chatId,
                 text:
                   "Не смог сгенерировать изображение.\n" +
                   "Попробуй другой промпт или модель.\n\n" +
-                  `Ошибка: ${msg}`.slice(0, 3500)
+                  `Ошибка: ${formatHfError(genErr)}`
               });
             }
           }
