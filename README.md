@@ -9,11 +9,15 @@
 - `HF_TOKEN` — токен Hugging Face (нужен для генерации картинок командой `/img`)
 - (опционально) `HF_TEXT_TO_IMAGE_MODEL` — модель для text-to-image (по умолчанию `black-forest-labs/FLUX.1-schnell`)
 - (опционально) `HF_ENDPOINT_URL` — явный endpoint Hugging Face Router (например `https://router.huggingface.co/hf-inference/models/<model>`)
+- `IMG_STYLE_PROMPT` — фиксированный промпт-стиль для обработки фото (по умолчанию `В мире дикой природы`)
+- (опционально) `HF_IMAGE_TO_IMAGE_MODEL` — модель для image-to-image (по умолчанию `timbrooks/instruct-pix2pix`)
+- (опционально) `HF_IMAGE_ENDPOINT_URL` — явный endpoint для image-to-image (например `https://router.huggingface.co/hf-inference/models/<model>`)
 
 ## Команды
 
 - `/start` → `привет`
-- `/img <промпт>` → генерирует картинку и отправляет её
+- `/img` → попросит прислать фото, обработает его в стиле из `IMG_STYLE_PROMPT`
+- `/t2i <промпт>` → генерирует картинку по тексту и отправляет её
 
 ## Деплой на Vercel
 

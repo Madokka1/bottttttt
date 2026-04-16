@@ -61,12 +61,36 @@ function isStartCommand(text) {
   return /^\/start(\s|$|@)/i.test(text.trim());
 }
 
-function parseImgCommand(text) {
+function parseCommand(text, command) {
   if (!text) return null;
   const trimmed = text.trim();
-  const match = trimmed.match(/^\/img(?:@[^\s]+)?(?:\s+([\s\S]+))?$/i);
+  const match = trimmed.match(new RegExp(`^\\/${command}(?:@[^\\s]+)?(?:\\s+([\\s\\S]+))?$`, "i"));
   if (!match) return null;
   return (match[1] ?? "").trim();
+}
+
+const PENDING_TTL_MS = 5 * 60 * 1000;
+const pendingImageByChatId = new Map();
+
+function prunePending(now) {
+  for (const [chatId, expiresAt] of pendingImageByChatId.entries()) {
+    if (expiresAt <= now) pendingImageByChatId.delete(chatId);
+  }
+}
+
+function setPending(chatId, now) {
+  prunePending(now);
+  pendingImageByChatId.set(String(chatId), now + PENDING_TTL_MS);
+}
+
+function isPending(chatId, now) {
+  prunePending(now);
+  const expiresAt = pendingImageByChatId.get(String(chatId));
+  return typeof expiresAt === "number" && expiresAt > now;
+}
+
+function clearPending(chatId) {
+  pendingImageByChatId.delete(String(chatId));
 }
 
 async function generateImage(prompt) {
@@ -105,6 +129,38 @@ async function generateImage(prompt) {
     // Keep it fast for serverless timeouts / free inference (only for SD-like models)
     ...(isStableDiffusionFamily ? { parameters: { num_inference_steps: 5 } } : {}),
     // HF Inference API options (helps with cold starts)
+    options: { wait_for_model: true, use_cache: true }
+  });
+}
+
+async function stylizePhoto(inputImageBlob) {
+  let hfToken = process.env.HF_TOKEN || process.env.HUGGINGFACE_TOKEN;
+  if (!hfToken) throw new Error("HF_TOKEN is not set");
+  hfToken = hfToken.trim();
+  if (/^bearer\s+/i.test(hfToken)) hfToken = hfToken.replace(/^bearer\s+/i, "").trim();
+  if (!hfToken.startsWith("hf_")) {
+    throw new Error(
+      "HF_TOKEN must be a Hugging Face Access Token (usually starts with 'hf_'). Create one in Hugging Face Settings → Access Tokens."
+    );
+  }
+
+  const stylePrompt = (process.env.IMG_STYLE_PROMPT || "В мире дикой природы").trim();
+  const model = process.env.HF_IMAGE_TO_IMAGE_MODEL || "timbrooks/instruct-pix2pix";
+  const endpointUrl =
+    process.env.HF_IMAGE_ENDPOINT_URL ||
+    `https://router.huggingface.co/hf-inference/models/${model}`;
+
+  const { InferenceClient } = await import("@huggingface/inference");
+  const client = new InferenceClient(hfToken);
+
+  return await client.imageToImage({
+    endpointUrl,
+    inputs: inputImageBlob,
+    parameters: {
+      prompt: stylePrompt,
+      num_inference_steps: 5,
+      guidance_scale: 7.5
+    },
     options: { wait_for_model: true, use_cache: true }
   });
 }
@@ -160,6 +216,20 @@ function sendJson(res, statusCode, payload) {
   res.end(JSON.stringify(payload));
 }
 
+async function downloadTelegramPhotoAsBlob(fileId) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set");
+
+  const file = await telegramApi("getFile", { file_id: fileId });
+  const filePath = file?.file_path;
+  if (!filePath) throw new Error("Telegram getFile returned no file_path");
+
+  const url = `https://api.telegram.org/file/bot${token}/${filePath}`;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`Failed to download Telegram file: HTTP ${resp.status}`);
+  return await resp.blob();
+}
+
 module.exports = async (req, res) => {
   try {
     if (req.method === "GET") {
@@ -181,46 +251,104 @@ module.exports = async (req, res) => {
     const update = await getJsonBody(req);
     const message = update?.message ?? update?.edited_message;
 
-    if (message?.chat?.id && typeof message.text === "string") {
+    if (message?.chat?.id) {
       const chatId = message.chat.id;
-      const text = message.text;
+      const now = Date.now();
 
-      if (isStartCommand(text)) {
-        await telegramApi("sendMessage", { chat_id: chatId, text: "привет" });
-      } else {
-        const prompt = parseImgCommand(text);
-        if (prompt !== null) {
-          if (!prompt) {
+      // 1) Text commands
+      if (typeof message.text === "string") {
+        const text = message.text;
+
+        if (isStartCommand(text)) {
+          await telegramApi("sendMessage", { chat_id: chatId, text: "привет" });
+        } else {
+          const imgCmd = parseCommand(text, "img");
+          if (imgCmd !== null) {
+            // /img triggers photo stylization flow (fixed prompt)
+            setPending(chatId, now);
+            const stylePrompt = (process.env.IMG_STYLE_PROMPT || "В мире дикой природы").trim();
             await telegramApi("sendMessage", {
               chat_id: chatId,
-              text: "Использование: /img <что нарисовать>"
+              text:
+                "Ок! Пришли фото, я обработаю его в стиле:\n" +
+                stylePrompt +
+                "\n\nМожно просто отправить фото следующим сообщением."
             });
           } else {
+            const t2iPrompt = parseCommand(text, "t2i");
+            if (t2iPrompt !== null) {
+              if (!t2iPrompt) {
+                await telegramApi("sendMessage", {
+                  chat_id: chatId,
+                  text: "Использование: /t2i <что нарисовать>"
+                });
+              } else {
+                await telegramApi("sendMessage", {
+                  chat_id: chatId,
+                  text: "Генерирую изображение…"
+                });
+
+                try {
+                  const imageBlob = await generateImage(t2iPrompt);
+                  const fileName = guessFileNameFromMime(imageBlob.type);
+
+                  const form = new FormData();
+                  form.append("chat_id", String(chatId));
+                  form.append("photo", imageBlob, fileName);
+                  form.append("caption", t2iPrompt.slice(0, 1024));
+
+                  await telegramApiMultipart("sendPhoto", form);
+                } catch (genErr) {
+                  console.error("text-to-image failed:", genErr);
+                  await telegramApi("sendMessage", {
+                    chat_id: chatId,
+                    text:
+                      "Не смог сгенерировать изображение.\n" +
+                      "Попробуй другой промпт или модель.\n\n" +
+                      `Ошибка: ${formatHfError(genErr)}`
+                  });
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // 2) Photo message (for pending /img flow)
+      const hasPhoto = Array.isArray(message.photo) && message.photo.length > 0;
+      if (hasPhoto && isPending(chatId, now)) {
+        clearPending(chatId);
+
+        const bestPhoto = message.photo[message.photo.length - 1];
+        const fileId = bestPhoto?.file_id;
+        if (!fileId) {
+          await telegramApi("sendMessage", { chat_id: chatId, text: "Не вижу file_id у фото :(" });
+        } else {
+          await telegramApi("sendMessage", {
+            chat_id: chatId,
+            text: "Обрабатываю фото…"
+          });
+
+          try {
+            const inputBlob = await downloadTelegramPhotoAsBlob(fileId);
+            const outBlob = await stylizePhoto(inputBlob);
+            const fileName = guessFileNameFromMime(outBlob.type);
+
+            const form = new FormData();
+            form.append("chat_id", String(chatId));
+            form.append("photo", outBlob, fileName);
+            form.append("caption", (process.env.IMG_STYLE_PROMPT || "В мире дикой природы").trim().slice(0, 1024));
+
+            await telegramApiMultipart("sendPhoto", form);
+          } catch (err) {
+            console.error("photo stylization failed:", err);
             await telegramApi("sendMessage", {
               chat_id: chatId,
-              text: "Генерирую изображение…"
+              text:
+                "Не смог обработать фото.\n" +
+                "Попробуй отправить другое фото или поменять модель.\n\n" +
+                `Ошибка: ${formatHfError(err)}`
             });
-
-            try {
-              const imageBlob = await generateImage(prompt);
-              const fileName = guessFileNameFromMime(imageBlob.type);
-
-              const form = new FormData();
-              form.append("chat_id", String(chatId));
-              form.append("photo", imageBlob, fileName);
-              form.append("caption", prompt.slice(0, 1024));
-
-              await telegramApiMultipart("sendPhoto", form);
-            } catch (genErr) {
-              console.error("image generation failed:", genErr);
-              await telegramApi("sendMessage", {
-                chat_id: chatId,
-                text:
-                  "Не смог сгенерировать изображение.\n" +
-                  "Попробуй другой промпт или модель.\n\n" +
-                  `Ошибка: ${formatHfError(genErr)}`
-              });
-            }
           }
         }
       }
