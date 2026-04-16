@@ -225,6 +225,67 @@ async function geminiGenerateImage({ prompt, inputImageBlob }) {
   return new Blob([bytes], { type: mimeType });
 }
 
+function extractRetryAfterSeconds(err) {
+  const details = err?.httpBody?.error?.details;
+  if (!Array.isArray(details)) return null;
+  const retryInfo = details.find((d) => d?.["@type"]?.includes("google.rpc.RetryInfo"));
+  const delay = retryInfo?.retryDelay;
+  if (typeof delay !== "string") return null;
+  const match = delay.match(/^(\d+)s$/);
+  if (!match) return null;
+  return Number(match[1]);
+}
+
+function formatModelError(err) {
+  // Gemini errors we throw include httpStatus/httpBody
+  const status = err?.httpResponse?.status ?? err?.httpStatus;
+  const requestId = err?.httpResponse?.requestId;
+  const body = err?.httpResponse?.body ?? err?.httpBody;
+  const url = err?.httpRequest?.url;
+
+  const parts = [];
+  if (typeof status === "number") parts.push(`HTTP ${status}`);
+  if (typeof requestId === "string" && requestId) parts.push(`requestId=${requestId}`);
+  if (typeof url === "string" && url) parts.push(url);
+
+  let bodyText = "";
+  if (typeof body === "string") bodyText = body;
+  else if (body && typeof body === "object") {
+    const e = body?.error;
+    const candidate =
+      typeof e?.message === "string"
+        ? e.message
+        : typeof body.error === "string"
+          ? body.error
+          : typeof body.message === "string"
+            ? body.message
+            : typeof body.detail === "string"
+              ? body.detail
+              : "";
+    bodyText = candidate || JSON.stringify(body);
+  }
+
+  const msg = typeof err?.message === "string" ? err.message : String(err);
+  const extra = bodyText ? `\n${bodyText}` : "";
+  const header = parts.length ? `${parts.join(" | ")}\n` : "";
+
+  const retryAfter = extractRetryAfterSeconds(err);
+  const hint429 =
+    status === 429
+      ? `\n\nПодсказка: лимит/квота исчерпаны. ${retryAfter ? `Попробуй снова через ~${retryAfter} сек.` : ""} Если это Google AI Studio (Gemini) — включи биллинг/план и проверь квоты в консоли.`
+      : "";
+  const hint401 =
+    status === 401
+      ? "\n\nПодсказка: проверь, что `HF_TOKEN` — это Hugging Face Access Token вида `hf_...` (Settings → Access Tokens) и что в значении нет лишнего `Bearer ` / пробелов."
+      : "";
+  const hint402 =
+    status === 402
+      ? "\n\nПодсказка: это платный inference-провайдер. Для работы нужно пополнить Hugging Face credits (Billing) или выбрать/подключить другого провайдера."
+      : "";
+
+  return (header + msg + extra + hint429 + hint401 + hint402).slice(0, 3500);
+}
+
 async function generateImage(prompt) {
   if (getGeminiApiKey()) {
     return await geminiGenerateImage({ prompt });
@@ -337,42 +398,7 @@ function guessFileNameFromMime(mimeType) {
 }
 
 function formatHfError(err) {
-  const status = err?.httpResponse?.status ?? err?.httpStatus;
-  const requestId = err?.httpResponse?.requestId;
-  const body = err?.httpResponse?.body ?? err?.httpBody;
-  const url = err?.httpRequest?.url;
-
-  const parts = [];
-  if (typeof status === "number") parts.push(`HTTP ${status}`);
-  if (typeof requestId === "string" && requestId) parts.push(`requestId=${requestId}`);
-  if (typeof url === "string" && url) parts.push(url);
-
-  let bodyText = "";
-  if (typeof body === "string") bodyText = body;
-  else if (body && typeof body === "object") {
-    const candidate =
-      typeof body.error === "string"
-        ? body.error
-        : typeof body.message === "string"
-          ? body.message
-          : typeof body.detail === "string"
-            ? body.detail
-            : "";
-    bodyText = candidate || JSON.stringify(body);
-  }
-
-  const msg = typeof err?.message === "string" ? err.message : String(err);
-  const extra = bodyText ? `\n${bodyText}` : "";
-  const header = parts.length ? `${parts.join(" | ")}\n` : "";
-
-  const hint =
-    status === 401
-      ? "\n\nПодсказка: проверь, что `HF_TOKEN` — это Hugging Face Access Token вида `hf_...` (Settings → Access Tokens) и что в значении нет лишнего `Bearer ` / пробелов."
-      : status === 402
-        ? "\n\nПодсказка: это платный inference-провайдер. Для работы нужно пополнить Hugging Face credits (Billing) или выбрать/подключить другого провайдера."
-      : "";
-
-  return (header + msg + extra + hint).slice(0, 3500);
+  return formatModelError(err);
 }
 
 function sendJson(res, statusCode, payload) {
