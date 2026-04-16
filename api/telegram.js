@@ -63,10 +63,9 @@ function isStartCommand(text) {
 
 function mainMenuReplyMarkup() {
   return {
-    inline_keyboard: [
-      [{ text: "Сгенерировать", callback_data: "generate" }],
-      [{ text: "Партнеры", callback_data: "partners" }]
-    ]
+    keyboard: [[{ text: "Сгенерировать" }, { text: "Партнеры" }]],
+    resize_keyboard: true,
+    one_time_keyboard: false
   };
 }
 
@@ -288,36 +287,6 @@ module.exports = async (req, res) => {
 
     const update = await getJsonBody(req);
     const message = update?.message ?? update?.edited_message;
-    const callbackQuery = update?.callback_query;
-
-    if (callbackQuery?.id) {
-      await answerCallbackQuery(callbackQuery.id);
-      const chatId = callbackQuery?.message?.chat?.id;
-      const data = callbackQuery?.data;
-      const now = Date.now();
-
-      if (chatId && typeof data === "string") {
-        if (data === "generate") {
-          setPending(chatId, now);
-          const stylePrompt = (process.env.IMG_STYLE_PROMPT || "В мире дикой природы").trim();
-          await telegramApi("sendMessage", {
-            chat_id: chatId,
-            text:
-              "Пришли фото, я обработаю его в стиле:\n" +
-              stylePrompt +
-              "\n\nМожно просто отправить фото следующим сообщением.",
-            reply_markup: mainMenuReplyMarkup()
-          });
-        } else if (data === "partners") {
-          await telegramApi("sendMessage", {
-            chat_id: chatId,
-            text: "Партнеры: пока пусто (сюда добавим список/ссылки).",
-            reply_markup: mainMenuReplyMarkup()
-          });
-        }
-      }
-    }
-
     if (message?.chat?.id) {
       const chatId = message.chat.id;
       const now = Date.now();
