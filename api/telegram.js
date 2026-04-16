@@ -25,9 +25,19 @@ function getHordeApiKey() {
   return (process.env.HORDE_API_KEY || "0000000000").trim();
 }
 
-function getHordeBaseUrl() {
-  // Official API base (SDK default): https://aihorde.net/api/ + /v2/...
-  return (process.env.HORDE_BASE_URL || "https://aihorde.net/api/v2").replace(/\/+$/, "");
+function getHordeBaseUrls() {
+  // AI Horde can be flaky; allow fallbacks.
+  // Env:
+  // - HORDE_BASE_URLS="https://aihorde.net/api/v2,https://stablehorde.net/api/v2"
+  // - or legacy HORDE_BASE_URL
+  const raw = (process.env.HORDE_BASE_URLS || process.env.HORDE_BASE_URL || "").trim();
+  const list = raw
+    ? raw
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : ["https://aihorde.net/api/v2", "https://stablehorde.net/api/v2"];
+  return list.map((u) => u.replace(/\/+$/, ""));
 }
 
 function hordeCheckReplyMarkup(jobId) {
@@ -220,7 +230,6 @@ function getHordeJobMeta(id) {
 }
 
 async function hordeFetch(path, init) {
-  const url = `${getHordeBaseUrl()}${path}`;
   const headers = {
     ...(init?.headers || {}),
     apikey: getHordeApiKey(),
@@ -236,37 +245,48 @@ async function hordeFetch(path, init) {
         : 0;
 
   let lastErr;
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const { controller, timeout } = withTimeout(Number(process.env.HORDE_HTTP_TIMEOUT_MS || 8000));
-    try {
-      const resp = await fetch(url, { ...init, headers, signal: controller.signal });
-      const json = await resp.json().catch(() => null);
-      if (!resp.ok) {
-        const details = json ? JSON.stringify(json) : String(resp.status);
-        const err = new Error(`AI Horde error: ${details}`);
-        err.httpStatus = resp.status;
-        err.httpBody = json ?? details;
-        err.httpUrl = url;
-        lastErr = err;
+  const baseUrls = getHordeBaseUrls();
+  for (const baseUrl of baseUrls) {
+    const url = `${baseUrl}${path}`;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const { controller, timeout } = withTimeout(Number(process.env.HORDE_HTTP_TIMEOUT_MS || 8000));
+      try {
+        const resp = await fetch(url, { ...init, headers, signal: controller.signal });
+        const json = await resp.json().catch(() => null);
+        if (!resp.ok) {
+          const details = json ? JSON.stringify(json) : String(resp.status);
+          const err = new Error(`AI Horde error: ${details}`);
+          err.httpStatus = resp.status;
+          err.httpBody = json ?? details;
+          err.httpUrl = url;
+          lastErr = err;
 
-        // Retry on transient errors for GETs
-        if (method === "GET" && [502, 503, 504].includes(resp.status) && attempt < maxRetries) {
+          const transient = [502, 503, 504].includes(resp.status);
+          // Retry on transient errors for GETs
+          if (method === "GET" && transient && attempt < maxRetries) {
+            await sleep(500 * (attempt + 1));
+            continue;
+          }
+          // On transient errors, try the next base URL
+          if (transient) break;
+
+          throw err;
+        }
+        return json;
+      } catch (err) {
+        lastErr = err;
+        const isAbort = err?.name === "AbortError";
+        const transient = isAbort || err?.httpStatus === 503 || err?.httpStatus === 504 || err?.httpStatus === 502;
+        if (method === "GET" && transient && attempt < maxRetries) {
           await sleep(500 * (attempt + 1));
           continue;
         }
+        // If transient, try next base URL
+        if (transient) break;
         throw err;
+      } finally {
+        clearTimeout(timeout);
       }
-      return json;
-    } catch (err) {
-      lastErr = err;
-      const isAbort = err?.name === "AbortError";
-      if (method === "GET" && (isAbort || err?.httpStatus === 503) && attempt < maxRetries) {
-        await sleep(500 * (attempt + 1));
-        continue;
-      }
-      throw err;
-    } finally {
-      clearTimeout(timeout);
     }
   }
   throw lastErr;
@@ -392,7 +412,8 @@ async function hordeSubmit({ prompt, sourceImageBlob }) {
 
   const submit = await hordeFetch("/generate/async", {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
+    retries: 2
   });
 
   const id = submit?.id;
