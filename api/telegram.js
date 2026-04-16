@@ -145,21 +145,21 @@ async function stylizePhoto(inputImageBlob) {
   }
 
   const stylePrompt = (process.env.IMG_STYLE_PROMPT || "В мире дикой природы").trim();
-  const model = process.env.HF_IMAGE_TO_IMAGE_MODEL || "timbrooks/instruct-pix2pix";
-  const endpointUrl =
-    process.env.HF_IMAGE_ENDPOINT_URL ||
-    `https://router.huggingface.co/hf-inference/models/${model}`;
+  // This model is mapped to multiple Inference Providers (fal-ai / replicate / wavespeed) via HF router.
+  // It supports image-to-image edits driven by a text prompt.
+  const model =
+    process.env.HF_IMAGE_TO_IMAGE_MODEL || "black-forest-labs/FLUX.1-Kontext-dev";
 
   const { InferenceClient } = await import("@huggingface/inference");
   const client = new InferenceClient(hfToken);
 
   return await client.imageToImage({
-    endpointUrl,
+    model,
     inputs: inputImageBlob,
     parameters: {
       prompt: stylePrompt,
-      num_inference_steps: 5,
-      guidance_scale: 7.5
+      // keep it fast for serverless; providers may ignore unsupported params
+      num_inference_steps: 5
     },
     options: { wait_for_model: true, use_cache: true }
   });

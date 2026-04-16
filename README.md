@@ -10,8 +10,7 @@
 - (опционально) `HF_TEXT_TO_IMAGE_MODEL` — модель для text-to-image (по умолчанию `black-forest-labs/FLUX.1-schnell`)
 - (опционально) `HF_ENDPOINT_URL` — явный endpoint Hugging Face Router (например `https://router.huggingface.co/hf-inference/models/<model>`)
 - `IMG_STYLE_PROMPT` — фиксированный промпт-стиль для обработки фото (по умолчанию `В мире дикой природы`)
-- (опционально) `HF_IMAGE_TO_IMAGE_MODEL` — модель для image-to-image (по умолчанию `timbrooks/instruct-pix2pix`)
-- (опционально) `HF_IMAGE_ENDPOINT_URL` — явный endpoint для image-to-image (например `https://router.huggingface.co/hf-inference/models/<model>`)
+- (опционально) `HF_IMAGE_TO_IMAGE_MODEL` — модель для image-to-image (по умолчанию `black-forest-labs/FLUX.1-Kontext-dev`)
 
 ## Команды
 
