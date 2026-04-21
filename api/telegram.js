@@ -1,4 +1,5 @@
 const crypto = require("crypto");
+const kie = require("./kie");
 
 function getJsonBody(req) {
   return new Promise((resolve, reject) => {
@@ -81,19 +82,6 @@ function getPublicBaseUrl(req) {
   const host = req?.headers?.host;
   if (host) return `https://${host}`;
   return (process.env.PUBLIC_BASE_URL || "").trim().replace(/\/+$/, "");
-}
-
-function getPollinationsBaseUrl() {
-  return (process.env.POLLINATIONS_BASE_URL || "https://image.pollinations.ai").replace(/\/+$/, "");
-}
-
-function parseCommaList(value) {
-  const raw = (value || "").trim();
-  if (!raw) return [];
-  return raw
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
 }
 
 function mainMenuReplyMarkup() {
@@ -204,32 +192,6 @@ function formatHttpError(err) {
   return `${header ? header + "\n" : ""}${msg}${extra}`.slice(0, 3500);
 }
 
-async function pollinationsFetchImage(url) {
-  const { controller, timeout } = withTimeout(Number(process.env.POLLINATIONS_HTTP_TIMEOUT_MS || 45000));
-  try {
-    const resp = await fetch(url, { signal: controller.signal });
-    if (!resp.ok) {
-      const err = new Error("Pollinations request failed");
-      err.httpStatus = resp.status;
-      err.httpUrl = url.toString();
-      err.httpBody = await resp.text().catch(() => "");
-      throw err;
-    }
-    return await resp.blob();
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function generateImage(prompt) {
-  const baseUrl = getPollinationsBaseUrl();
-  const model = (process.env.POLLINATIONS_TEXT_MODEL || "flux").trim();
-  const url = new URL(`${baseUrl}/prompt/${encodeURIComponent(prompt)}`);
-  url.searchParams.set("model", model);
-  url.searchParams.set("nologo", "true");
-  return await pollinationsFetchImage(url);
-}
-
 function signProxyUrl({ req, fileId }) {
   const secret = (process.env.TG_PROXY_SECRET || "").trim();
   if (!secret) throw new Error("TG_PROXY_SECRET is not set");
@@ -252,30 +214,13 @@ async function stylizePhoto({ req, fileId }) {
 
   const inputUrl = signProxyUrl({ req, fileId });
 
-  const baseUrl = getPollinationsBaseUrl();
-  const models =
-    parseCommaList(process.env.POLLINATIONS_EDIT_MODELS).length > 0
-      ? parseCommaList(process.env.POLLINATIONS_EDIT_MODELS)
-      : [(process.env.POLLINATIONS_EDIT_MODEL || "flux").trim()].filter(Boolean);
+  const { urls } = await kie.generateImageFromImage({ prompt, imageUrl: inputUrl });
+  return await kie.fetchImageAsBlob(urls[0]);
+}
 
-  let lastErr;
-  for (const model of models) {
-    const url = new URL(`${baseUrl}/prompt/${encodeURIComponent(prompt)}`);
-    url.searchParams.set("model", model);
-    url.searchParams.set("image", inputUrl);
-    url.searchParams.set("nologo", "true");
-
-    try {
-      return await pollinationsFetchImage(url);
-    } catch (err) {
-      lastErr = err;
-      const body = typeof err?.httpBody === "string" ? err.httpBody : "";
-      // Some models are gated behind enter.pollinations.ai (paid).
-      if (body.includes("only available on enter.pollinations.ai")) continue;
-      throw err;
-    }
-  }
-  throw lastErr ?? new Error("Pollinations request failed");
+async function generateImage(prompt) {
+  const { urls } = await kie.generateImageFromText(prompt);
+  return await kie.fetchImageAsBlob(urls[0]);
 }
 
 module.exports = async (req, res) => {

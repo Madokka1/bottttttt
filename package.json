@@ -8,7 +8,9 @@
     "node": ">=18"
   },
   "scripts": {
-    "set-webhook": "node scripts/setWebhook.mjs"
+    "set-webhook": "node scripts/setWebhook.mjs",
+    "get-webhook": "node scripts/getWebhookInfo.mjs",
+    "delete-webhook": "node scripts/deleteWebhook.mjs"
   },
   "dependencies": {}
 }

@@ -9,11 +9,11 @@
 - (опционально) `START_RULES_TEXT` — текст правил, который показывается на `/start`
 - `REQUIRED_CHANNELS` — каналы-партнеры (через запятую, например `@channel1,@channel2,@channel3`); без подписки генерация недоступна
 - `TG_PROXY_SECRET` — секрет для проксирования Telegram-фото (нужно для обработки фото через внешнюю генерацию без утечки токена бота)
-- `POLLINATIONS_BASE_URL` — базовый URL Pollinations (по умолчанию `https://image.pollinations.ai`)
-- (опционально) `POLLINATIONS_TEXT_MODEL` — модель для `/t2i` (по умолчанию `flux`)
-- (опционально) `POLLINATIONS_EDIT_MODEL` — модель для обработки фото (по умолчанию `flux`)
-- (опционально) `POLLINATIONS_EDIT_MODELS` — список моделей для обработки фото (фолбэки через запятую)
-- (опционально) `POLLINATIONS_HTTP_TIMEOUT_MS` — таймаут запросов к Pollinations
+- `KIE_API_KEY` — ключ API от KIE.ai
+- (опционально) `KIE_BASE_URL` — базовый URL API (по умолчанию `https://api.kie.ai`)
+- (опционально) `KIE_T2I_MODEL`, `KIE_T2I_ASPECT_RATIO` — модель/параметры для `/t2i`
+- (опционально) `KIE_I2I_MODEL` — модель для обработки фото
+- (опционально) `KIE_POLL_TIMEOUT_MS`, `KIE_POLL_INTERVAL_MS` — ожидание/пуллинг задач
 - `IMG_STYLE_PROMPT` — фиксированный промпт-стиль для обработки фото (по умолчанию `В мире дикой природы`)
 
 ## Команды
@@ -26,7 +26,7 @@
 
 1. Залей репозиторий в GitHub/GitLab/Bitbucket.
 2. Импортируй проект в Vercel.
-3. В **Project Settings → Environment Variables** добавь `TELEGRAM_BOT_TOKEN`, `HF_TOKEN` (и при желании `TELEGRAM_WEBHOOK_SECRET`).
+3. В **Project Settings → Environment Variables** добавь `TELEGRAM_BOT_TOKEN`, `KIE_API_KEY` (и при желании `TELEGRAM_WEBHOOK_SECRET`).
 4. Задеплой.
 
 Webhook URL будет таким:
