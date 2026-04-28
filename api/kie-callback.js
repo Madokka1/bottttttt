@@ -1,5 +1,5 @@
 const crypto = require("crypto");
-const kie = require("./kie");
+const kie = require("../lib/kie");
 
 function sendJson(res, statusCode, payload) {
   res.statusCode = statusCode;
@@ -159,4 +159,3 @@ module.exports = async (req, res) => {
     return sendJson(res, 200, { ok: false });
   }
 };
-

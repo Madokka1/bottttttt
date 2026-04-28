@@ -1,5 +1,5 @@
 const crypto = require("crypto");
-const kie = require("./kie");
+const kie = require("../lib/kie");
 
 function getJsonBody(req) {
   return new Promise((resolve, reject) => {
