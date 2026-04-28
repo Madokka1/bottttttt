@@ -266,19 +266,23 @@ async function checkRequiredSubscriptions(userId) {
 }
 
 function partnersText() {
-  const channels = parseRequiredChannels();
-  const lines = ["Партнеры:"];
+  const channels = parseRequiredChannels(); // Допустим, возвращает ['@channel1', '@channel2']
+  const lines = ["<b>Партнеры:</b>"]; // Делаем заголовок жирным
 
-  // Static partner link (always shown)
-  lines.push(`Официальный телеграм-канал ОМК - @omk_official`);
-  lines.push(`108digital - @team108`);
-  lines.push(`NN - @naebnet`);
+  // Статические ссылки (красиво упакованные)
+  lines.push(`<a href="https://t.me/omk_official">Официальный телеграм-канал ОМК</a>`);
+  lines.push(`<a href="https://t.me/team108">108digital</a> — @team108`);
+  lines.push(`<a href="https://t.me/naebnet">NN</a> — @naebnet`);
 
-  if (!channels.length) return lines.join("\n");
-  for (const ch of channels) {
-    const link = `https://t.me/${ch.replace(/^@/, "")}`;
-    lines.push(`- ${ch} — ${link}`);
+  if (channels.length > 0) {
+    lines.push("\n<b>Обязательные подписки:</b>");
+    for (const ch of channels) {
+      const cleanCh = ch.replace(/^@/, "");
+      // Делаем название канала кликабельной ссылкой
+      lines.push(`- <a href="https://t.me/${cleanCh}">${ch}</a>`);
+    }
   }
+
   return lines.join("\n");
 }
 
