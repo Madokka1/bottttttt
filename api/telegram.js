@@ -104,6 +104,14 @@ function generationVariantsReplyMarkup() {
   };
 }
 
+function backOnlyReplyMarkup() {
+  return {
+    keyboard: [[{ text: "Назад" }]],
+    resize_keyboard: true,
+    one_time_keyboard: false
+  };
+}
+
 function isGenerationVariant(text) {
   const t = String(text || "").trim();
   return (
@@ -238,8 +246,23 @@ function parseRequiredChannels() {
 
 // Temporarily disabled (as requested): always allow.
 async function checkRequiredSubscriptions(userId) {
-  void userId;
-  return { ok: true, channels: [] };
+  const required = Array.from(new Set(["@omk_official", ...parseRequiredChannels()]));
+  if (!required.length) return { ok: true, missing: [] };
+
+  const missing = [];
+  for (const chatId of required) {
+    try {
+      const member = await telegramApi("getChatMember", { chat_id: chatId, user_id: userId });
+      const status = String(member?.status || "").toLowerCase();
+      const ok = status === "member" || status === "administrator" || status === "creator";
+      if (!ok) missing.push(chatId);
+    } catch (err) {
+      // If we can't verify (bot isn't admin / chat not accessible), treat as missing to be safe.
+      missing.push(chatId);
+    }
+  }
+
+  return { ok: missing.length === 0, missing };
 }
 
 function partnersText() {
@@ -257,6 +280,10 @@ function partnersText() {
     lines.push(`- ${ch} — ${link}`);
   }
   return lines.join("\n");
+}
+
+function pleaseSubscribeText() {
+  return "Пожалуйста, подпишитесь на всех партнеров и попробуйте снова.\n\n" + partnersText();
 }
 
 function guessFileNameFromMime(mimeType) {
@@ -367,7 +394,7 @@ module.exports = async (req, res) => {
           } else {
             const subs = await checkRequiredSubscriptions(userId);
             if (!subs.ok) {
-              await telegramApi("sendMessage", { chat_id: chatId, text: partnersText() });
+              await telegramApi("sendMessage", { chat_id: chatId, text: pleaseSubscribeText(), reply_markup: mainMenuReplyMarkup() });
             } else {
               await telegramApi("sendMessage", {
                 chat_id: chatId,
@@ -382,7 +409,7 @@ module.exports = async (req, res) => {
           } else {
             const subs = await checkRequiredSubscriptions(userId);
             if (!subs.ok) {
-              await telegramApi("sendMessage", { chat_id: chatId, text: partnersText() });
+              await telegramApi("sendMessage", { chat_id: chatId, text: pleaseSubscribeText(), reply_markup: mainMenuReplyMarkup() });
             } else {
               setPending(chatId, now, { mode: "style_photo" });
               const stylePrompt = (process.env.IMG_STYLE_PROMPT || "В мире дикой природы").trim();
@@ -403,21 +430,30 @@ module.exports = async (req, res) => {
             reply_markup: mainMenuReplyMarkup()
           });
         } else if (text.trim() === "Назад") {
+          const pending = getPending(chatId, now);
           clearPending(chatId);
-          await telegramApi("sendMessage", { chat_id: chatId, text: "Ок.", reply_markup: mainMenuReplyMarkup() });
+          if (pending?.mode === "variant_photo") {
+            await telegramApi("sendMessage", {
+              chat_id: chatId,
+              text: "Выбери вариант генерации:",
+              reply_markup: generationVariantsReplyMarkup()
+            });
+          } else {
+            await telegramApi("sendMessage", { chat_id: chatId, text: "Ок.", reply_markup: mainMenuReplyMarkup() });
+          }
         } else if (isGenerationVariant(text)) {
           if (!userId) {
             await telegramApi("sendMessage", { chat_id: chatId, text: "Не вижу user_id :(" });
           } else {
             const subs = await checkRequiredSubscriptions(userId);
             if (!subs.ok) {
-              await telegramApi("sendMessage", { chat_id: chatId, text: partnersText(), reply_markup: mainMenuReplyMarkup() });
+              await telegramApi("sendMessage", { chat_id: chatId, text: pleaseSubscribeText(), reply_markup: mainMenuReplyMarkup() });
             } else {
               setPending(chatId, now, { mode: "variant_photo", variantText: String(text).trim() });
               await telegramApi("sendMessage", {
                 chat_id: chatId,
                 text: "Отправьте вашу фотографию.",
-                reply_markup: generationVariantsReplyMarkup()
+                reply_markup: backOnlyReplyMarkup()
               });
             }
           }
