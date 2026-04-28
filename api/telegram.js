@@ -259,7 +259,9 @@ module.exports = async (req, res) => {
           const rulesText = getStartRulesText();
           await telegramApi("sendMessage", {
             chat_id: chatId,
-            text: `Это бот ${botName}.\n\n${rulesText}`,
+            text: `<b>Привет! Это бот Объединённой металлургической компании</b>\n\n` +
+        `Этот бот создан специально к празднику весны и труда! С помощью нейросетей мы поможем вам преобразить ваши снимки: просто загрузите фото, и искусственный интеллект мгновенно перерисует его в уникальной <b>первомайской стилистике</b>.`,
+            parse_mode: "HTML",
             reply_markup: mainMenuReplyMarkup()
           });
         } else if (text.trim() === "Сгенерировать" || parseCommand(text, "img") !== null) {
