@@ -194,6 +194,42 @@ function buildMayDayPhotoEditPrompt(variantText) {
     );
   }
 
+  if (v === "Работа работой, май — по расписанию") {
+    return (
+      "1960s Soviet motivational poster illustration, socialist realism, vibe of labor and spring, clean graphic lines, optimistic and energetic. " +
+      "Combination of industry and spring: subtle factory silhouettes, blooming branches, bright blue sky, red banners, atmosphere of proud labor and holiday. " +
+      "Prominent Cyrillic lettering 'Работа работой, май — по расписанию' in a bold, dynamic Soviet 1960s sans-serif font, integrated into the poster design. " +
+      "Preserve original identity, facial features, and likeness. Ensure the subjects look inspired and proud without distortion. " +
+      "Graphic poster painting style, slightly more saturated, clear silhouettes, smooth color transitions, heroic but human expressions. " +
+      "Strong poster reds, industrial greys, sky blue, and fresh spring green, vibrant and high-contrast palette. " +
+      "Clear, direct daylight, creating a sense of a fresh May morning, no deep shadows. " +
+      "Poster-like arrangement, balancing the original photo structure with the large slogan 'Работа работой, май — по расписанию'. " +
+      "Clean paper texture, vintage screen-print effect, minimal grain. " +
+      "Strictly May Day and labor theme, no modern technology, no English text, no messy handwriting, no photorealism. " +
+      "Extra style hint: " +
+      stylePrompt +
+      "."
+    );
+  }
+
+  if (v === "Товарищи-металлурги, с праздником!") {
+    return (
+      "1950s Soviet industrial poster aesthetic, socialist realism, monumental and heroic, celebrating the labor of steelworkers. " +
+      "Powerful metallurgical background: blast furnace silhouettes, glowing molten metal, sparks, heroic scale structures, combined with May Day red banners and spring bouquets. " +
+      "Large, monumental Cyrillic lettering 'Товарищи-металлурги, с праздником!' in a solid blocky Soviet font, integrated as a powerful headline. " +
+      "Preserve original identity, facial features, and likeness. Subjects should look proud and strong, fitting the heroic metallurgist archetype. " +
+      "Heroic painting style, strong silhouettes, bold brushstrokes, simplified but powerful details. " +
+      "Dominant deep reds, molten gold and orange accents, strong industrial blues and greys, with fresh spring greens. " +
+      "Dramatic but optimistic daylight mixed with the warm glow from industrial processes, sunlit atmosphere. " +
+      "Monumental poster composition, balancing the subjects with the large text and industrial background. " +
+      "Vintage poster print texture, slight canvas feel, aged paper effect. " +
+      "Strictly metallurgical and May Day theme, no modern technology, no English text, no photorealism. " +
+      "Extra style hint: " +
+      stylePrompt +
+      "."
+    );
+  }
+
   return (
     "Отредактируй фотографию в стиле праздничной открытки к 1 Мая (День труда). " +
     "Добавь на изображение ровно эту надпись (как на открытке), без изменений: " +
