@@ -266,28 +266,53 @@ async function checkRequiredSubscriptions(userId) {
 }
 
 function partnersText() {
-  const channels = parseRequiredChannels(); // Допустим, возвращает ['@channel1', '@channel2']
-  const lines = ["<b>Партнеры:</b>"]; // Делаем заголовок жирным
+  const channels = parseRequiredChannels();
+  const lines = ["Партнеры:"];
 
-  // Статические ссылки (красиво упакованные)
-  lines.push(`<a href="https://t.me/omk_official">Официальный телеграм-канал ОМК</a>`);
-  lines.push(`<a href="https://t.me/team108">108digital</a> — @team108`);
-  lines.push(`<a href="https://t.me/naebnet">NN</a> — @naebnet`);
+  // Static partner link (always shown)
+  lines.push(`Официальный телеграм-канал ОМК - @omk_official`);
+  lines.push(`108digital - @team108`);
+  lines.push(`NN - @naebnet`);
 
-  if (channels.length > 0) {
-    lines.push("\n<b>Обязательные подписки:</b>");
-    for (const ch of channels) {
-      const cleanCh = ch.replace(/^@/, "");
-      // Делаем название канала кликабельной ссылкой
-      lines.push(`- <a href="https://t.me/${cleanCh}">${ch}</a>`);
-    }
+  if (!channels.length) return lines.join("\n");
+  for (const ch of channels) {
+    const link = `https://t.me/${ch.replace(/^@/, "")}`;
+    lines.push(`- ${ch} — ${link}`);
   }
-
   return lines.join("\n");
 }
 
 function pleaseSubscribeText() {
   return "Пожалуйста, подпишитесь на всех партнеров и попробуйте снова.\n\n" + partnersText();
+}
+
+const INITIAL_GENERATIONS = Number(process.env.INITIAL_GENERATIONS || 3);
+const generationCreditsByUserId = new Map();
+
+function ensureGenerationCredits(userId) {
+  const key = String(userId);
+  if (!generationCreditsByUserId.has(key)) {
+    generationCreditsByUserId.set(key, Number.isFinite(INITIAL_GENERATIONS) ? INITIAL_GENERATIONS : 3);
+    return { granted: true, credits: generationCreditsByUserId.get(key) };
+  }
+  return { granted: false, credits: generationCreditsByUserId.get(key) };
+}
+
+function getGenerationCredits(userId) {
+  return generationCreditsByUserId.get(String(userId)) ?? 0;
+}
+
+function spendGenerationCredit(userId) {
+  const key = String(userId);
+  const current = getGenerationCredits(key);
+  if (current <= 0) return 0;
+  const next = current - 1;
+  generationCreditsByUserId.set(key, next);
+  return next;
+}
+
+function noCreditsText() {
+  return "У вас закончились генерации. Подпишитесь на партнеров или попробуйте позже.";
 }
 
 function guessFileNameFromMime(mimeType) {
@@ -400,6 +425,19 @@ module.exports = async (req, res) => {
             if (!subs.ok) {
               await telegramApi("sendMessage", { chat_id: chatId, text: pleaseSubscribeText(), reply_markup: mainMenuReplyMarkup() });
             } else {
+              const { granted } = ensureGenerationCredits(userId);
+              if (granted) {
+                await telegramApi("sendMessage", {
+                  chat_id: chatId,
+                  text: "Вы подписались на всех партнеров. Вам начислено 3 генерации изображений.",
+                  reply_markup: mainMenuReplyMarkup()
+                });
+              }
+
+              if (getGenerationCredits(userId) <= 0) {
+                await telegramApi("sendMessage", { chat_id: chatId, text: noCreditsText(), reply_markup: mainMenuReplyMarkup() });
+                return;
+              }
               await telegramApi("sendMessage", {
                 chat_id: chatId,
                 text: "Выбери вариант генерации:",
@@ -415,6 +453,11 @@ module.exports = async (req, res) => {
             if (!subs.ok) {
               await telegramApi("sendMessage", { chat_id: chatId, text: pleaseSubscribeText(), reply_markup: mainMenuReplyMarkup() });
             } else {
+              ensureGenerationCredits(userId);
+              if (getGenerationCredits(userId) <= 0) {
+                await telegramApi("sendMessage", { chat_id: chatId, text: noCreditsText(), reply_markup: mainMenuReplyMarkup() });
+                return;
+              }
               setPending(chatId, now, { mode: "style_photo" });
               const stylePrompt = (process.env.IMG_STYLE_PROMPT || "В мире дикой природы").trim();
               await telegramApi("sendMessage", {
@@ -453,6 +496,11 @@ module.exports = async (req, res) => {
             if (!subs.ok) {
               await telegramApi("sendMessage", { chat_id: chatId, text: pleaseSubscribeText(), reply_markup: mainMenuReplyMarkup() });
             } else {
+              ensureGenerationCredits(userId);
+              if (getGenerationCredits(userId) <= 0) {
+                await telegramApi("sendMessage", { chat_id: chatId, text: noCreditsText(), reply_markup: mainMenuReplyMarkup() });
+                return;
+              }
               setPending(chatId, now, { mode: "variant_photo", variantText: String(text).trim() });
               await telegramApi("sendMessage", {
                 chat_id: chatId,
@@ -497,6 +545,21 @@ module.exports = async (req, res) => {
       const hasPhoto = Array.isArray(message.photo) && message.photo.length > 0;
       const pending = hasPhoto ? getPending(chatId, now) : null;
       if (hasPhoto && pending) {
+        if (pending.mode && (pending.mode === "variant_photo" || pending.mode === "style_photo")) {
+          if (!userId) {
+            await telegramApi("sendMessage", { chat_id: chatId, text: "Не вижу user_id :(" });
+            clearPending(chatId);
+            return sendJson(res, 200, { ok: true });
+          }
+
+          ensureGenerationCredits(userId);
+          if (getGenerationCredits(userId) <= 0) {
+            await telegramApi("sendMessage", { chat_id: chatId, text: noCreditsText(), reply_markup: mainMenuReplyMarkup() });
+            clearPending(chatId);
+            return sendJson(res, 200, { ok: true });
+          }
+        }
+
         clearPending(chatId);
 
         const bestPhoto = message.photo[message.photo.length - 1];
@@ -527,11 +590,14 @@ module.exports = async (req, res) => {
             await telegramApiMultipart("sendPhoto", form);
 
             if (pending.mode === "variant_photo") {
+              const left = spendGenerationCredit(userId);
               await telegramApi("sendMessage", {
                 chat_id: chatId,
-                text: "Готово. Хочешь выбрать ещё вариант?",
+                text: `Готово. Осталось генераций: ${left}.`,
                 reply_markup: generationVariantsReplyMarkup()
               });
+            } else {
+              spendGenerationCredit(userId);
             }
           } catch (err) {
             console.error("photo stylization failed:", err);
