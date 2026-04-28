@@ -227,11 +227,13 @@ function clearPending(chatId) {
 function parseRequiredChannels() {
   const raw = (process.env.REQUIRED_CHANNELS || "").trim();
   if (!raw) return [];
+  const blocked = new Set(["@uecrus_official"]);
   return raw
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean)
-    .map((s) => (s.startsWith("@") ? s : `@${s}`));
+    .map((s) => (s.startsWith("@") ? s : `@${s}`))
+    .filter((s) => !blocked.has(s));
 }
 
 // Temporarily disabled (as requested): always allow.
