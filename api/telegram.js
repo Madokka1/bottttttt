@@ -271,8 +271,8 @@ function partnersText() {
 
   // Static partner link (always shown)
   lines.push(`Официальный телеграм-канал ОМК - @omk_official`);
-  lines.push(`- @omk_official`);
-  lines.push(`- @omk_official`);
+  lines.push(`108digital - @team108`);
+  lines.push(`NN - @naebnet`);
 
   if (!channels.length) return lines.join("\n");
   for (const ch of channels) {
