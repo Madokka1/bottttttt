@@ -77,11 +77,16 @@ async function telegramApiMultipart(method, formData) {
 }
 
 function getPublicBaseUrl(req) {
+  const publicBase = (process.env.PUBLIC_BASE_URL || "").trim().replace(/\/+$/, "");
+  if (publicBase) return publicBase;
+
   const vercelUrl = (process.env.VERCEL_URL || "").trim();
   if (vercelUrl) return `https://${vercelUrl}`;
+
   const host = req?.headers?.host;
   if (host) return `https://${host}`;
-  return (process.env.PUBLIC_BASE_URL || "").trim().replace(/\/+$/, "");
+
+  return "";
 }
 
 function mainMenuReplyMarkup() {
