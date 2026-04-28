@@ -176,6 +176,24 @@ function buildMayDayPhotoEditPrompt(variantText) {
     );
   }
 
+  if (v === "С Первомаем!") {
+    return (
+      "Authentic Soviet May Day postcard illustration, USSR 1950s–1970s, International Workers' Day, socialist realism, праздничная демонстрация, весенний оптимизм. " +
+      "Visual cues of May Day: red flags, banners, flowers, bright sky, festive crowd atmosphere, feeling of unity, labor celebration. " +
+      "Integrated festive lettering 'С Первомаем!' in classic Soviet poster bold sans-serif font, slightly arched or horizontal, bright yellow or white color with thin red stroke, looking like hand-painted holiday calligraphy. " +
+      "Preserve original identity, facial features, proportions, and likeness of all people. Maintain recognizability. " +
+      "Semi-realistic Soviet painting style, simplified forms, clean edges, soft idealization of faces. " +
+      "Dominant reds with balanced sky blue, warm beige skin tones, fresh spring greens. " +
+      "Bright daylight, soft and optimistic, no dark mood. " +
+      "Slightly enhance composition to resemble a May Day celebratory scene with the text 'С Первомаем!' logically placed. " +
+      "Subtle print texture, light grain, soft vintage finish. " +
+      "Strictly May Day theme only, no other holidays, no modern elements, no photorealism. " +
+      "Extra style hint: " +
+      stylePrompt +
+      "."
+    );
+  }
+
   return (
     "Отредактируй фотографию в стиле праздничной открытки к 1 Мая (День труда). " +
     "Добавь на изображение ровно эту надпись (как на открытке), без изменений: " +
