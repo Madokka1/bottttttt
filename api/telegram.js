@@ -156,11 +156,16 @@ function buildMayDayPhotoEditPrompt(variantText) {
 
   if (v === "Без текста") {
     return (
-      "Отредактируй фотографию в стиле праздничной открытки к 1 Мая (День труда). " +
-      "Без надписей и без букв вообще. " +
-      "Сохрани композицию, но добавь праздничную атмосферу. " +
-      "Высокое качество, красивый свет, чистая композиция. " +
-      "Стилистика: " +
+      "Authentic Soviet May Day postcard illustration, USSR 1950s–1970s, International Workers' Day, socialist realism, праздничная демонстрация, весенний оптимизм. " +
+      "Visual cues of May Day: red flags, banners without text, flowers (especially spring bouquets), bright sky, doves, festive crowd atmosphere, feeling of unity, labor celebration, peace and optimism. " +
+      "Preserve original identity, facial features, proportions, and likeness of all people. Maintain recognizability. No distortion. " +
+      "Semi-realistic Soviet painting style, simplified forms, clean edges, soft idealization of faces, slightly heroic but natural look. " +
+      "Dominant reds with balanced sky blue, warm beige skin tones, fresh spring greens, warm sunlight tones, harmonious vintage palette. " +
+      "Bright daylight, soft and optimistic, no dramatic shadows, no dark mood. " +
+      "Slightly enhance composition to resemble a May Day parade or celebratory scene, uplifting and forward-looking, but keep original structure. " +
+      "Subtle print texture, light grain, soft vintage finish, no heavy aging. " +
+      "Strictly May Day theme only, no other holidays, no text, no typography, no modern elements, no photorealism. " +
+      "Extra style hint: " +
       stylePrompt +
       "."
     );
@@ -358,6 +363,32 @@ function signProxyUrl({ req, fileId }) {
 async function stylizePhotoWithVariant({ req, fileId, variantText }) {
   const prompt = buildMayDayPhotoEditPrompt(variantText);
   const inputUrl = signProxyUrl({ req, fileId });
+  const v = String(variantText || "").trim();
+
+  if (v === "Без текста") {
+    const nanoBananaModel = (process.env.KIE_NANO_BANANA_MODEL || "nano-banana-1").trim();
+    const extraInput = {
+      style_id: "soviet_may_day_postcard",
+      mode: "image_to_image",
+      description: "Applies authentic Soviet May Day (1st of May) postcard style with preserved identity",
+      negative_prompt:
+        "text, typography, letters, slogans, numbers, holiday greetings, new year, christmas, snow, winter, santa, gifts, fireworks, 8 march, women's day, balloons with text, birthday, confetti, modern posters, photorealism, cinematic lighting, dark tones, distorted faces, caricature, anime, oversaturated colors, heavy textures",
+      controls: {
+        style_strength: 0.75,
+        identity_preservation: 0.9,
+        texture_strength: 0.25,
+        composition_change: 0.5,
+        context_enforcement: 0.8
+      }
+    };
+
+    const { urls } = await kie.generateImageFromImage(
+      { prompt, imageUrl: inputUrl },
+      { model: nanoBananaModel, extra_input_json: JSON.stringify(extraInput) }
+    );
+    return await kie.fetchImageAsBlob(urls[0]);
+  }
+
   const { urls } = await kie.generateImageFromImage({ prompt, imageUrl: inputUrl });
   return await kie.fetchImageAsBlob(urls[0]);
 }
