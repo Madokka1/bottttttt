@@ -92,6 +92,86 @@ function mainMenuReplyMarkup() {
   };
 }
 
+function generationVariantsReplyMarkup() {
+  return {
+    keyboard: [
+      [{ text: "Без текста" }],
+      [{ text: "С Первомаем!" }],
+      [{ text: "Работа работой, май — по расписанию" }],
+      [{ text: "Товарищи-металлурги, с праздником!" }],
+      [{ text: "Назад" }]
+    ],
+    resize_keyboard: true,
+    one_time_keyboard: false
+  };
+}
+
+function isGenerationVariant(text) {
+  const t = String(text || "").trim();
+  return (
+    t === "Без текста" ||
+    t === "С Первомаем!" ||
+    t === "Работа работой, май — по расписанию" ||
+    t === "Товарищи-металлурги, с праздником!"
+  );
+}
+
+function buildMayDayPostcardPrompt(variantText) {
+  const stylePrompt = (process.env.IMG_STYLE_PROMPT || "В мире дикой природы").trim();
+  const v = String(variantText || "").trim();
+
+  if (v === "Без текста") {
+    return (
+      "Сгенерируй праздничную открытку к 1 Мая (День труда). " +
+      "Без надписей и без букв вообще. " +
+      "Высокое качество, красивый свет, чистая композиция. " +
+      "Стилистика: " +
+      stylePrompt +
+      "."
+    );
+  }
+
+  return (
+    "Сгенерируй праздничную открытку к 1 Мая (День труда). " +
+    "Добавь на изображение ровно эту надпись (как на открытке), без изменений: " +
+    `"${v}". ` +
+    "Текст должен быть читабельным и аккуратно вписанным в композицию. " +
+    "Высокое качество, красивый свет, чистая композиция. " +
+    "Стилистика: " +
+    stylePrompt +
+    "."
+  );
+}
+
+function buildMayDayPhotoEditPrompt(variantText) {
+  const stylePrompt = (process.env.IMG_STYLE_PROMPT || "В мире дикой природы").trim();
+  const v = String(variantText || "").trim();
+
+  if (v === "Без текста") {
+    return (
+      "Отредактируй фотографию в стиле праздничной открытки к 1 Мая (День труда). " +
+      "Без надписей и без букв вообще. " +
+      "Сохрани композицию, но добавь праздничную атмосферу. " +
+      "Высокое качество, красивый свет, чистая композиция. " +
+      "Стилистика: " +
+      stylePrompt +
+      "."
+    );
+  }
+
+  return (
+    "Отредактируй фотографию в стиле праздничной открытки к 1 Мая (День труда). " +
+    "Добавь на изображение ровно эту надпись (как на открытке), без изменений: " +
+    `"${v}". ` +
+    "Текст должен быть читабельным и аккуратно вписанным в композицию. " +
+    "Сохрани композицию, но добавь праздничную атмосферу. " +
+    "Высокое качество, красивый свет, чистая композиция. " +
+    "Стилистика: " +
+    stylePrompt +
+    "."
+  );
+}
+
 function isStartCommand(text) {
   if (!text) return false;
   return /^\/start(\s|$|@)/i.test(text.trim());
@@ -119,27 +199,31 @@ function parseCommand(text, command) {
 }
 
 const PENDING_TTL_MS = 5 * 60 * 1000;
-const pendingImageByChatId = new Map();
+const pendingByChatId = new Map();
 
 function prunePending(now) {
-  for (const [chatId, expiresAt] of pendingImageByChatId.entries()) {
-    if (expiresAt <= now) pendingImageByChatId.delete(chatId);
+  for (const [chatId, entry] of pendingByChatId.entries()) {
+    if (!entry || typeof entry.expiresAt !== "number" || entry.expiresAt <= now) pendingByChatId.delete(chatId);
   }
 }
 
-function setPending(chatId, now) {
+function setPending(chatId, now, data) {
   prunePending(now);
-  pendingImageByChatId.set(String(chatId), now + PENDING_TTL_MS);
+  pendingByChatId.set(String(chatId), {
+    expiresAt: now + PENDING_TTL_MS,
+    ...(data && typeof data === "object" ? data : {})
+  });
 }
 
-function isPending(chatId, now) {
+function getPending(chatId, now) {
   prunePending(now);
-  const expiresAt = pendingImageByChatId.get(String(chatId));
-  return typeof expiresAt === "number" && expiresAt > now;
+  const entry = pendingByChatId.get(String(chatId));
+  if (!entry || typeof entry.expiresAt !== "number" || entry.expiresAt <= now) return null;
+  return entry;
 }
 
 function clearPending(chatId) {
-  pendingImageByChatId.delete(String(chatId));
+  pendingByChatId.delete(String(chatId));
 }
 
 function parseRequiredChannels() {
@@ -205,6 +289,13 @@ function signProxyUrl({ req, fileId }) {
   return `${base}/api/tg-proxy?file_id=${encodeURIComponent(fileId)}&exp=${exp}&sig=${encodeURIComponent(sig)}`;
 }
 
+async function stylizePhotoWithVariant({ req, fileId, variantText }) {
+  const prompt = buildMayDayPhotoEditPrompt(variantText);
+  const inputUrl = signProxyUrl({ req, fileId });
+  const { urls } = await kie.generateImageFromImage({ prompt, imageUrl: inputUrl });
+  return await kie.fetchImageAsBlob(urls[0]);
+}
+
 async function stylizePhoto({ req, fileId }) {
   const stylePrompt = (process.env.IMG_STYLE_PROMPT || "В мире дикой природы").trim();
   const prompt =
@@ -264,7 +355,7 @@ module.exports = async (req, res) => {
             parse_mode: "HTML",
             reply_markup: mainMenuReplyMarkup()
           });
-        } else if (text.trim() === "Сгенерировать" || parseCommand(text, "img") !== null) {
+        } else if (text.trim() === "Сгенерировать") {
           if (!userId) {
             await telegramApi("sendMessage", { chat_id: chatId, text: "Не вижу user_id :(" });
           } else {
@@ -272,7 +363,22 @@ module.exports = async (req, res) => {
             if (!subs.ok) {
               await telegramApi("sendMessage", { chat_id: chatId, text: partnersText() });
             } else {
-              setPending(chatId, now);
+              await telegramApi("sendMessage", {
+                chat_id: chatId,
+                text: "Выбери вариант генерации:",
+                reply_markup: generationVariantsReplyMarkup()
+              });
+            }
+          }
+        } else if (parseCommand(text, "img") !== null) {
+          if (!userId) {
+            await telegramApi("sendMessage", { chat_id: chatId, text: "Не вижу user_id :(" });
+          } else {
+            const subs = await checkRequiredSubscriptions(userId);
+            if (!subs.ok) {
+              await telegramApi("sendMessage", { chat_id: chatId, text: partnersText() });
+            } else {
+              setPending(chatId, now, { mode: "style_photo" });
               const stylePrompt = (process.env.IMG_STYLE_PROMPT || "В мире дикой природы").trim();
               await telegramApi("sendMessage", {
                 chat_id: chatId,
@@ -290,6 +396,25 @@ module.exports = async (req, res) => {
             text: partnersText(),
             reply_markup: mainMenuReplyMarkup()
           });
+        } else if (text.trim() === "Назад") {
+          clearPending(chatId);
+          await telegramApi("sendMessage", { chat_id: chatId, text: "Ок.", reply_markup: mainMenuReplyMarkup() });
+        } else if (isGenerationVariant(text)) {
+          if (!userId) {
+            await telegramApi("sendMessage", { chat_id: chatId, text: "Не вижу user_id :(" });
+          } else {
+            const subs = await checkRequiredSubscriptions(userId);
+            if (!subs.ok) {
+              await telegramApi("sendMessage", { chat_id: chatId, text: partnersText(), reply_markup: mainMenuReplyMarkup() });
+            } else {
+              setPending(chatId, now, { mode: "variant_photo", variantText: String(text).trim() });
+              await telegramApi("sendMessage", {
+                chat_id: chatId,
+                text: "Отправьте вашу фотографию.",
+                reply_markup: generationVariantsReplyMarkup()
+              });
+            }
+          }
         } else {
           const t2iPrompt = parseCommand(text, "t2i");
           if (t2iPrompt !== null) {
@@ -324,7 +449,8 @@ module.exports = async (req, res) => {
 
       // Photo handling for pending flow
       const hasPhoto = Array.isArray(message.photo) && message.photo.length > 0;
-      if (hasPhoto && isPending(chatId, now)) {
+      const pending = hasPhoto ? getPending(chatId, now) : null;
+      if (hasPhoto && pending) {
         clearPending(chatId);
 
         const bestPhoto = message.photo[message.photo.length - 1];
@@ -334,21 +460,41 @@ module.exports = async (req, res) => {
         } else {
           await telegramApi("sendMessage", { chat_id: chatId, text: "Обрабатываю фото…" });
           try {
-            const outBlob = await stylizePhoto({ req, fileId });
+            const outBlob =
+              pending.mode === "variant_photo"
+                ? await stylizePhotoWithVariant({ req, fileId, variantText: pending.variantText })
+                : await stylizePhoto({ req, fileId });
             const fileName = guessFileNameFromMime(outBlob.type);
 
             const form = new FormData();
             form.append("chat_id", String(chatId));
             form.append("photo", outBlob, fileName);
-            form.append("caption", (process.env.IMG_STYLE_PROMPT || "В мире дикой природы").trim().slice(0, 1024));
+            form.append(
+              "caption",
+              (pending.mode === "variant_photo"
+                ? String(pending.variantText || "")
+                : (process.env.IMG_STYLE_PROMPT || "В мире дикой природы")
+              )
+                .trim()
+                .slice(0, 1024)
+            );
             await telegramApiMultipart("sendPhoto", form);
+
+            if (pending.mode === "variant_photo") {
+              await telegramApi("sendMessage", {
+                chat_id: chatId,
+                text: "Готово. Хочешь выбрать ещё вариант?",
+                reply_markup: generationVariantsReplyMarkup()
+              });
+            }
           } catch (err) {
             console.error("photo stylization failed:", err);
             await telegramApi("sendMessage", {
               chat_id: chatId,
               text:
                 "Не смог обработать фото.\n\n" +
-                `Ошибка: ${formatHttpError(err)}`
+                `Ошибка: ${formatHttpError(err)}`,
+              reply_markup: pending.mode === "variant_photo" ? generationVariantsReplyMarkup() : mainMenuReplyMarkup()
             });
           }
         }
