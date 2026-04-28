@@ -95,10 +95,8 @@ function mainMenuReplyMarkup() {
 function generationVariantsReplyMarkup() {
   return {
     keyboard: [
-      [{ text: "Без текста" }],
-      [{ text: "С Первомаем!" }],
-      [{ text: "Работа работой, май — по расписанию" }],
-      [{ text: "Товарищи-металлурги, с праздником!" }],
+      [{ text: "Без текста" }, { text: "С Первомаем!" }],
+      [{ text: "Работа работой, май — по расписанию" }, { text: "Товарищи-металлурги, с праздником!" }],
       [{ text: "Назад" }]
     ],
     resize_keyboard: true,
@@ -244,8 +242,14 @@ async function checkRequiredSubscriptions(userId) {
 
 function partnersText() {
   const channels = parseRequiredChannels();
-  if (!channels.length) return "Партнеры пока не настроены.";
   const lines = ["Партнеры:"];
+
+  // Static partner link (always shown)
+  lines.push(`Официальный телеграм-канал ОМК - @omk_official`);
+  lines.push(`- @omk_official`);
+  lines.push(`- @omk_official`);
+
+  if (!channels.length) return lines.join("\n");
   for (const ch of channels) {
     const link = `https://t.me/${ch.replace(/^@/, "")}`;
     lines.push(`- ${ch} — ${link}`);
