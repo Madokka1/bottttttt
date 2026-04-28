@@ -103,6 +103,7 @@ function guessFileNameFromMime(mimeType) {
 
 module.exports = async (req, res) => {
   try {
+    console.log("[kie-callback] hit", req.method, req.url);
     if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "Method not allowed" });
 
     const url = new URL(req.url, "http://localhost");

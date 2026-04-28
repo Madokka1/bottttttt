@@ -389,6 +389,9 @@ async function submitKieEditTask({ req, chatId, userId, fileId, variantText }) {
   const prompt = buildMayDayPhotoEditPrompt(v);
   const inputUrl = signProxyUrl({ req, fileId });
   const callBackUrl = signKieCallbackUrl({ req, chatId, userId, variantText: v });
+  if (String(process.env.DEBUG_KIE_CALLBACK_URL || "").trim() === "1") {
+    console.log("[kie] callback url:", callBackUrl.replace(/sig=[^&]+/, "sig=***"));
+  }
 
   if (v === "Без текста") {
     const nanoBananaModel = (process.env.KIE_NANO_BANANA_MODEL || "google/nano-banana-edit").trim();
@@ -436,6 +439,9 @@ async function submitKieStylizeTask({ req, chatId, userId, fileId }) {
 
   const inputUrl = signProxyUrl({ req, fileId });
   const callBackUrl = signKieCallbackUrl({ req, chatId, userId, variantText: stylePrompt || "IMG" });
+  if (String(process.env.DEBUG_KIE_CALLBACK_URL || "").trim() === "1") {
+    console.log("[kie] callback url:", callBackUrl.replace(/sig=[^&]+/, "sig=***"));
+  }
 
   return await kie.createTask({
     model: (process.env.KIE_I2I_MODEL || "grok-imagine/image-to-image").trim(),
