@@ -35,6 +35,23 @@ function getTaskIdFromPayload(body) {
   return "";
 }
 
+function getResultUrlFromPayload(body) {
+  if (!body || typeof body !== "object") return "";
+  const direct =
+    body?.data?.info?.resultImageUrl ||
+    body?.data?.resultImageUrl ||
+    body?.data?.result_url ||
+    body?.resultImageUrl ||
+    body?.result_url;
+  if (typeof direct === "string" && direct.trim()) return direct.trim();
+  const arr =
+    body?.data?.info?.resultUrls ||
+    body?.data?.resultUrls ||
+    body?.resultUrls;
+  if (Array.isArray(arr) && typeof arr[0] === "string") return arr[0];
+  return "";
+}
+
 async function telegramApi(method, payload) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set");
@@ -126,25 +143,39 @@ module.exports = async (req, res) => {
     });
 
     const taskId = getTaskIdFromPayload(body);
-    if (!taskId) return sendJson(res, 200, { ok: true, ignored: true });
+    const resultUrl = getResultUrlFromPayload(body);
+    if (!taskId && !resultUrl) return sendJson(res, 200, { ok: true, ignored: true });
 
-    const task = await kie.getTask(taskId);
-    const status = String(task?.status || "").toUpperCase();
-    if (status !== "SUCCESS") {
-      await telegramApi("sendMessage", {
-        chat_id: chatId,
-        text: `Не смог обработать фото.\n\nСтатус задачи: ${status || "UNKNOWN"}`
-      });
+    if (!resultUrl) {
+      const task = await kie.getTask(taskId);
+      const state = String(kie.getTaskState(task) || "").toLowerCase();
+      if (state !== "success") {
+        await telegramApi("sendMessage", {
+          chat_id: chatId,
+          text: `Не смог обработать фото.\n\nСтатус задачи: ${state || "unknown"}`
+        });
+        return sendJson(res, 200, { ok: true });
+      }
+
+      const urls = kie.parseResultUrls(task);
+      if (!urls.length) {
+        await telegramApi("sendMessage", { chat_id: chatId, text: "Не смог получить результат генерации (нет ссылки на изображение)." });
+        return sendJson(res, 200, { ok: true });
+      }
+
+      // prefer recordInfo resultUrls
+      const blob = await kie.fetchImageAsBlob(urls[0]);
+      const fileName = guessFileNameFromMime(blob.type);
+      const form = new FormData();
+      form.append("chat_id", String(chatId));
+      form.append("photo", blob, fileName);
+      form.append("caption", String(variantText).slice(0, 1024));
+      await telegramApiMultipart("sendPhoto", form);
+
       return sendJson(res, 200, { ok: true });
     }
 
-    const urls = kie.parseResultUrls(task);
-    if (!urls.length) {
-      await telegramApi("sendMessage", { chat_id: chatId, text: "Не смог получить результат генерации (нет ссылки на изображение)." });
-      return sendJson(res, 200, { ok: true });
-    }
-
-    const blob = await kie.fetchImageAsBlob(urls[0]);
+    const blob = await kie.fetchImageAsBlob(resultUrl);
     const fileName = guessFileNameFromMime(blob.type);
     const form = new FormData();
     form.append("chat_id", String(chatId));
