@@ -357,7 +357,8 @@ function signProxyUrl({ req, fileId }) {
   const base = getPublicBaseUrl(req);
   if (!base) throw new Error("PUBLIC_BASE_URL/VERCEL_URL is not set");
 
-  return `${base}/api/tg-proxy?file_id=${encodeURIComponent(fileId)}&exp=${exp}&sig=${encodeURIComponent(sig)}`;
+  // Some KIE models validate file type by URL extension, so we expose a `.jpg` route.
+  return `${base}/api/tg-proxy.jpg?file_id=${encodeURIComponent(fileId)}&exp=${exp}&sig=${encodeURIComponent(sig)}`;
 }
 
 async function stylizePhotoWithVariant({ req, fileId, variantText }) {
