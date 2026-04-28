@@ -9,8 +9,8 @@ function getKieBaseUrl() {
 }
 
 function getKieApiKey() {
-  const key = (process.env.KIE_API_KEY || "").trim();
-  if (!key) throw new Error("KIE_API_KEY is not set");
+  const key = (process.env.KIE_API_KEY || process.env.KIE_API || "").trim();
+  if (!key) throw new Error("KIE_API_KEY (or KIE_API) is not set");
   return key;
 }
 
@@ -215,4 +215,3 @@ module.exports = {
   generateImageFromImage,
   fetchImageAsBlob
 };
-

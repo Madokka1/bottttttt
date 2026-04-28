@@ -9,7 +9,7 @@
 - (опционально) `START_RULES_TEXT` — текст правил, который показывается на `/start`
 - `REQUIRED_CHANNELS` — каналы-партнеры (через запятую, например `@channel1,@channel2,@channel3`); без подписки генерация недоступна
 - `TG_PROXY_SECRET` — секрет для проксирования Telegram-фото (нужно для обработки фото через внешнюю генерацию без утечки токена бота)
-- `KIE_API_KEY` — ключ API от KIE.ai
+- `KIE_API_KEY` (или `KIE_API`) — ключ API от KIE.ai
 - (опционально) `KIE_BASE_URL` — базовый URL API (по умолчанию `https://api.kie.ai`)
 - (опционально) `KIE_T2I_MODEL`, `KIE_T2I_ASPECT_RATIO` — модель/параметры для `/t2i`
 - (опционально) `KIE_I2I_MODEL` — модель для обработки фото
@@ -26,7 +26,7 @@
 
 1. Залей репозиторий в GitHub/GitLab/Bitbucket.
 2. Импортируй проект в Vercel.
-3. В **Project Settings → Environment Variables** добавь `TELEGRAM_BOT_TOKEN`, `KIE_API_KEY` (и при желании `TELEGRAM_WEBHOOK_SECRET`).
+3. В **Project Settings → Environment Variables** добавь `TELEGRAM_BOT_TOKEN`, `KIE_API_KEY` (или `KIE_API`) (и при желании `TELEGRAM_WEBHOOK_SECRET`).
 4. Задеплой.
 
 Webhook URL будет таким:
