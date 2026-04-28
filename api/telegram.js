@@ -369,7 +369,16 @@ async function stylizePhotoWithVariant({ req, fileId, variantText }) {
   if (v === "Без текста") {
     const nanoBananaModel = (process.env.KIE_NANO_BANANA_MODEL || "google/nano-banana-edit").trim();
     const extraInput = { output_format: "png", image_size: "1:1" };
-    const { urls } = await kie.generateImageFromImage({ prompt, imageUrl: inputUrl }, { model: nanoBananaModel, extra_input_json: JSON.stringify(extraInput) });
+    const nanoTimeoutMs = Number(process.env.KIE_NANO_BANANA_POLL_TIMEOUT_MS || 180000);
+    const nanoPollMs = Number(process.env.KIE_NANO_BANANA_POLL_INTERVAL_MS || 2000);
+    const { urls } = await kie.generateImageFromImage(
+      { prompt, imageUrl: inputUrl },
+      {
+        model: nanoBananaModel,
+        extra_input_json: JSON.stringify(extraInput),
+        wait: { timeoutMs: nanoTimeoutMs, pollIntervalMs: nanoPollMs }
+      }
+    );
     return await kie.fetchImageAsBlob(urls[0]);
   }
 

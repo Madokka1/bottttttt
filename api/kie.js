@@ -128,7 +128,7 @@ async function generateImageFromText(prompt, opts = {}) {
   }
 
   const taskId = await createTask({ model, input });
-  const task = await waitForTask(taskId, {});
+  const task = await waitForTask(taskId, opts.wait || {});
 
   const status = String(task?.status || "").toUpperCase();
   if (status !== "SUCCESS") {
@@ -168,7 +168,7 @@ async function generateImageFromImage({ prompt, imageUrl }, opts = {}) {
   if (!input.image_urls.length) throw new Error("imageUrl is required");
 
   const taskId = await createTask({ model, input });
-  const task = await waitForTask(taskId, {});
+  const task = await waitForTask(taskId, opts.wait || {});
 
   const status = String(task?.status || "").toUpperCase();
   if (status !== "SUCCESS") {
