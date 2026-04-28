@@ -361,29 +361,57 @@ function signProxyUrl({ req, fileId }) {
   return `${base}/api/tg-proxy.jpg?file_id=${encodeURIComponent(fileId)}&exp=${exp}&sig=${encodeURIComponent(sig)}`;
 }
 
-async function stylizePhotoWithVariant({ req, fileId, variantText }) {
-  const prompt = buildMayDayPhotoEditPrompt(variantText);
-  const inputUrl = signProxyUrl({ req, fileId });
+function signKieCallbackUrl({ req, chatId, userId, variantText }) {
+  const secret = (process.env.KIE_CALLBACK_SECRET || "").trim();
+  if (!secret) throw new Error("KIE_CALLBACK_SECRET is not set");
+
+  const exp = Math.floor(Date.now() / 1000) + 30 * 60;
+  const sig = crypto
+    .createHmac("sha256", secret)
+    .update(`${chatId}.${userId}.${variantText}.${exp}`)
+    .digest("base64url");
+
+  const base = getPublicBaseUrl(req);
+  if (!base) throw new Error("PUBLIC_BASE_URL/VERCEL_URL is not set");
+
+  const url =
+    `${base}/api/kie-callback` +
+    `?chat_id=${encodeURIComponent(String(chatId))}` +
+    `&user_id=${encodeURIComponent(String(userId))}` +
+    `&variant=${encodeURIComponent(String(variantText))}` +
+    `&exp=${encodeURIComponent(String(exp))}` +
+    `&sig=${encodeURIComponent(String(sig))}`;
+  return url;
+}
+
+async function submitKieEditTask({ req, chatId, userId, fileId, variantText }) {
   const v = String(variantText || "").trim();
+  const prompt = buildMayDayPhotoEditPrompt(v);
+  const inputUrl = signProxyUrl({ req, fileId });
+  const callBackUrl = signKieCallbackUrl({ req, chatId, userId, variantText: v });
 
   if (v === "Без текста") {
     const nanoBananaModel = (process.env.KIE_NANO_BANANA_MODEL || "google/nano-banana-edit").trim();
     const extraInput = { output_format: "png", image_size: "1:1" };
-    const nanoTimeoutMs = Number(process.env.KIE_NANO_BANANA_POLL_TIMEOUT_MS || 180000);
-    const nanoPollMs = Number(process.env.KIE_NANO_BANANA_POLL_INTERVAL_MS || 2000);
-    const { urls } = await kie.generateImageFromImage(
-      { prompt, imageUrl: inputUrl },
-      {
-        model: nanoBananaModel,
-        extra_input_json: JSON.stringify(extraInput),
-        wait: { timeoutMs: nanoTimeoutMs, pollIntervalMs: nanoPollMs }
-      }
-    );
-    return await kie.fetchImageAsBlob(urls[0]);
+    return await kie.createTask({
+      model: nanoBananaModel,
+      input: {
+        prompt: String(prompt || "").trim(),
+        image_urls: [String(inputUrl || "").trim()].filter(Boolean),
+        ...extraInput
+      },
+      callBackUrl
+    });
   }
 
-  const { urls } = await kie.generateImageFromImage({ prompt, imageUrl: inputUrl });
-  return await kie.fetchImageAsBlob(urls[0]);
+  return await kie.createTask({
+    model: (process.env.KIE_I2I_MODEL || "grok-imagine/image-to-image").trim(),
+    input: {
+      prompt: String(prompt || "").trim(),
+      image_urls: [String(inputUrl || "").trim()].filter(Boolean)
+    },
+    callBackUrl
+  });
 }
 
 async function stylizePhoto({ req, fileId }) {
@@ -397,6 +425,26 @@ async function stylizePhoto({ req, fileId }) {
 
   const { urls } = await kie.generateImageFromImage({ prompt, imageUrl: inputUrl });
   return await kie.fetchImageAsBlob(urls[0]);
+}
+
+async function submitKieStylizeTask({ req, chatId, userId, fileId }) {
+  const stylePrompt = (process.env.IMG_STYLE_PROMPT || "В мире дикой природы").trim();
+  const prompt =
+    "Отредактируй изображение в стилистике: " +
+    stylePrompt +
+    ". Сохрани композицию, но сделай общий стиль соответствующим.";
+
+  const inputUrl = signProxyUrl({ req, fileId });
+  const callBackUrl = signKieCallbackUrl({ req, chatId, userId, variantText: stylePrompt || "IMG" });
+
+  return await kie.createTask({
+    model: (process.env.KIE_I2I_MODEL || "grok-imagine/image-to-image").trim(),
+    input: {
+      prompt: String(prompt || "").trim(),
+      image_urls: [String(inputUrl || "").trim()].filter(Boolean)
+    },
+    callBackUrl
+  });
 }
 
 async function generateImage(prompt) {
@@ -577,21 +625,6 @@ module.exports = async (req, res) => {
       const hasPhoto = Array.isArray(message.photo) && message.photo.length > 0;
       const pending = hasPhoto ? getPending(chatId, now) : null;
       if (hasPhoto && pending) {
-        if (pending.mode && (pending.mode === "variant_photo" || pending.mode === "style_photo")) {
-          if (!userId) {
-            await telegramApi("sendMessage", { chat_id: chatId, text: "Не вижу user_id :(" });
-            clearPending(chatId);
-            return sendJson(res, 200, { ok: true });
-          }
-
-          ensureGenerationCredits(userId);
-          if (getGenerationCredits(userId) <= 0) {
-            await telegramApi("sendMessage", { chat_id: chatId, text: noCreditsText(), reply_markup: mainMenuReplyMarkup() });
-            clearPending(chatId);
-            return sendJson(res, 200, { ok: true });
-          }
-        }
-
         clearPending(chatId);
 
         const bestPhoto = message.photo[message.photo.length - 1];
@@ -599,46 +632,32 @@ module.exports = async (req, res) => {
         if (!fileId) {
           await telegramApi("sendMessage", { chat_id: chatId, text: "Не вижу file_id у фото :(" });
         } else {
-          await telegramApi("sendMessage", { chat_id: chatId, text: "Обрабатываю фото…" });
-          try {
-            const outBlob =
+          if (!userId) {
+            await telegramApi("sendMessage", { chat_id: chatId, text: "Не вижу user_id :(" });
+            return sendJson(res, 200, { ok: true });
+          }
+
+          // Async flow: submit task to KIE and return immediately; result will be delivered by /api/kie-callback.
+          await telegramApi("sendMessage", {
+            chat_id: chatId,
+            text:
               pending.mode === "variant_photo"
-                ? await stylizePhotoWithVariant({ req, fileId, variantText: pending.variantText })
-                : await stylizePhoto({ req, fileId });
-            const fileName = guessFileNameFromMime(outBlob.type);
+                ? "Принял фото. Делаю открытку — пришлю, как будет готово."
+                : "Принял фото. Обрабатываю — пришлю, как будет готово."
+          });
 
-            const form = new FormData();
-            form.append("chat_id", String(chatId));
-            form.append("photo", outBlob, fileName);
-            form.append(
-              "caption",
-              (pending.mode === "variant_photo"
-                ? String(pending.variantText || "")
-                : (process.env.IMG_STYLE_PROMPT || "В мире дикой природы")
-              )
-                .trim()
-                .slice(0, 1024)
-            );
-            await telegramApiMultipart("sendPhoto", form);
-
+          try {
             if (pending.mode === "variant_photo") {
-              const left = spendGenerationCredit(userId);
-              await telegramApi("sendMessage", {
-                chat_id: chatId,
-                text: `Готово. Осталось генераций: ${left}.`,
-                reply_markup: generationVariantsReplyMarkup()
-              });
+              await submitKieEditTask({ req, chatId, userId, fileId, variantText: pending.variantText });
             } else {
-              spendGenerationCredit(userId);
+              // /img flow (style prompt) via callback to avoid timeouts.
+              await submitKieStylizeTask({ req, chatId, userId, fileId });
             }
           } catch (err) {
-            console.error("photo stylization failed:", err);
+            console.error("kie submit failed:", err);
             await telegramApi("sendMessage", {
               chat_id: chatId,
-              text:
-                "Не смог обработать фото.\n\n" +
-                `Ошибка: ${formatHttpError(err)}`,
-              reply_markup: pending.mode === "variant_photo" ? generationVariantsReplyMarkup() : mainMenuReplyMarkup()
+              text: "Не смог запустить обработку фото.\n\n" + `Ошибка: ${formatHttpError(err)}`
             });
           }
         }

@@ -1,0 +1,162 @@
+const crypto = require("crypto");
+const kie = require("./kie");
+
+function sendJson(res, statusCode, payload) {
+  res.statusCode = statusCode;
+  res.setHeader("content-type", "application/json; charset=utf-8");
+  res.end(JSON.stringify(payload));
+}
+
+function timingSafeEqual(a, b) {
+  const ab = Buffer.from(String(a));
+  const bb = Buffer.from(String(b));
+  if (ab.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ab, bb);
+}
+
+function getSecret() {
+  const secret = (process.env.KIE_CALLBACK_SECRET || "").trim();
+  if (!secret) throw new Error("KIE_CALLBACK_SECRET is not set");
+  return secret;
+}
+
+function sign(secret, chatId, userId, variantText, exp) {
+  return crypto
+    .createHmac("sha256", secret)
+    .update(`${chatId}.${userId}.${variantText}.${exp}`)
+    .digest("base64url");
+}
+
+function getTaskIdFromPayload(body) {
+  if (!body || typeof body !== "object") return "";
+  if (typeof body.taskId === "string") return body.taskId;
+  if (typeof body?.data?.taskId === "string") return body.data.taskId;
+  if (typeof body?.data?.id === "string") return body.data.id;
+  return "";
+}
+
+async function telegramApi(method, payload) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set");
+
+  const resp = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+
+  const json = await resp.json().catch(() => null);
+  if (!resp.ok || !json?.ok) {
+    const details = json ? JSON.stringify(json) : String(resp.status);
+    const err = new Error(`Telegram API error: ${details}`);
+    err.httpStatus = resp.status;
+    err.httpBody = json ?? details;
+    throw err;
+  }
+  return json.result;
+}
+
+async function telegramApiMultipart(method, formData) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set");
+
+  const resp = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+    method: "POST",
+    body: formData
+  });
+
+  const json = await resp.json().catch(() => null);
+  if (!resp.ok || !json?.ok) {
+    const details = json ? JSON.stringify(json) : String(resp.status);
+    const err = new Error(`Telegram API error: ${details}`);
+    err.httpStatus = resp.status;
+    err.httpBody = json ?? details;
+    throw err;
+  }
+  return json.result;
+}
+
+function guessFileNameFromMime(mimeType) {
+  const t = (mimeType || "").toLowerCase();
+  if (t.includes("png")) return "image.png";
+  if (t.includes("jpeg") || t.includes("jpg")) return "image.jpg";
+  if (t.includes("webp")) return "image.webp";
+  return "image.bin";
+}
+
+module.exports = async (req, res) => {
+  try {
+    if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "Method not allowed" });
+
+    const url = new URL(req.url, "http://localhost");
+    const chatId = url.searchParams.get("chat_id") || "";
+    const userId = url.searchParams.get("user_id") || "";
+    const variantText = url.searchParams.get("variant") || "";
+    const expRaw = url.searchParams.get("exp") || "";
+    const sig = url.searchParams.get("sig") || "";
+
+    const exp = Number(expRaw);
+    const now = Math.floor(Date.now() / 1000);
+    if (!chatId || !userId || !variantText || !Number.isFinite(exp) || exp <= now || !sig) {
+      return sendJson(res, 401, { ok: false, error: "Unauthorized" });
+    }
+
+    const expectedSig = sign(getSecret(), chatId, userId, variantText, expRaw);
+    if (!timingSafeEqual(sig, expectedSig)) return sendJson(res, 401, { ok: false, error: "Unauthorized" });
+
+    // Read json body (small)
+    const body = await new Promise((resolve, reject) => {
+      let data = "";
+      req.on("data", (c) => {
+        data += c;
+        if (data.length > 1024 * 1024) {
+          reject(new Error("Body too large"));
+          req.destroy();
+        }
+      });
+      req.on("end", () => {
+        if (!data) return resolve(null);
+        try {
+          resolve(JSON.parse(data));
+        } catch (e) {
+          reject(e);
+        }
+      });
+      req.on("error", reject);
+    });
+
+    const taskId = getTaskIdFromPayload(body);
+    if (!taskId) return sendJson(res, 200, { ok: true, ignored: true });
+
+    const task = await kie.getTask(taskId);
+    const status = String(task?.status || "").toUpperCase();
+    if (status !== "SUCCESS") {
+      await telegramApi("sendMessage", {
+        chat_id: chatId,
+        text: `Не смог обработать фото.\n\nСтатус задачи: ${status || "UNKNOWN"}`
+      });
+      return sendJson(res, 200, { ok: true });
+    }
+
+    const urls = kie.parseResultUrls(task);
+    if (!urls.length) {
+      await telegramApi("sendMessage", { chat_id: chatId, text: "Не смог получить результат генерации (нет ссылки на изображение)." });
+      return sendJson(res, 200, { ok: true });
+    }
+
+    const blob = await kie.fetchImageAsBlob(urls[0]);
+    const fileName = guessFileNameFromMime(blob.type);
+    const form = new FormData();
+    form.append("chat_id", String(chatId));
+    form.append("photo", blob, fileName);
+    form.append("caption", String(variantText).slice(0, 1024));
+    await telegramApiMultipart("sendPhoto", form);
+
+    return sendJson(res, 200, { ok: true });
+  } catch (err) {
+    console.error(err);
+    // Always 200 so KIE doesn't retry forever (if it retries).
+    return sendJson(res, 200, { ok: false });
+  }
+};
+
