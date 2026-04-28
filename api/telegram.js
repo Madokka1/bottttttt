@@ -85,8 +85,9 @@ function getPublicBaseUrl(req) {
 }
 
 function mainMenuReplyMarkup() {
+  const partnersEnabled = String(process.env.PARTNERS_UI_ENABLED || "").trim() === "1";
   return {
-    keyboard: [[{ text: "Сгенерировать" }, { text: "Партнеры" }]],
+    keyboard: partnersEnabled ? [[{ text: "Сгенерировать" }, { text: "Партнеры" }]] : [[{ text: "Сгенерировать" }]],
     resize_keyboard: true,
     one_time_keyboard: false
   };
@@ -246,6 +247,9 @@ function parseRequiredChannels() {
 
 // Temporarily disabled (as requested): always allow.
 async function checkRequiredSubscriptions(userId) {
+  if (String(process.env.PARTNERS_UI_ENABLED || "").trim() !== "1") {
+    return { ok: true, missing: [] };
+  }
   const required = Array.from(new Set(["@omk_official", ...parseRequiredChannels()]));
   if (!required.length) return { ok: true, missing: [] };
 
@@ -471,6 +475,10 @@ module.exports = async (req, res) => {
             }
           }
         } else if (text.trim() === "Партнеры") {
+          if (String(process.env.PARTNERS_UI_ENABLED || "").trim() !== "1") {
+            await telegramApi("sendMessage", { chat_id: chatId, text: "Ок.", reply_markup: mainMenuReplyMarkup() });
+            return;
+          }
           await telegramApi("sendMessage", {
             chat_id: chatId,
             text: partnersText(),
