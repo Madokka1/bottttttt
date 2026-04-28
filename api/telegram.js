@@ -366,26 +366,9 @@ async function stylizePhotoWithVariant({ req, fileId, variantText }) {
   const v = String(variantText || "").trim();
 
   if (v === "Без текста") {
-    const nanoBananaModel = (process.env.KIE_NANO_BANANA_MODEL || "nano-banana-1").trim();
-    const extraInput = {
-      style_id: "soviet_may_day_postcard",
-      mode: "image_to_image",
-      description: "Applies authentic Soviet May Day (1st of May) postcard style with preserved identity",
-      negative_prompt:
-        "text, typography, letters, slogans, numbers, holiday greetings, new year, christmas, snow, winter, santa, gifts, fireworks, 8 march, women's day, balloons with text, birthday, confetti, modern posters, photorealism, cinematic lighting, dark tones, distorted faces, caricature, anime, oversaturated colors, heavy textures",
-      controls: {
-        style_strength: 0.75,
-        identity_preservation: 0.9,
-        texture_strength: 0.25,
-        composition_change: 0.5,
-        context_enforcement: 0.8
-      }
-    };
-
-    const { urls } = await kie.generateImageFromImage(
-      { prompt, imageUrl: inputUrl },
-      { model: nanoBananaModel, extra_input_json: JSON.stringify(extraInput) }
-    );
+    const nanoBananaModel = (process.env.KIE_NANO_BANANA_MODEL || "google/nano-banana-edit").trim();
+    const extraInput = { output_format: "png", image_size: "1:1" };
+    const { urls } = await kie.generateImageFromImage({ prompt, imageUrl: inputUrl }, { model: nanoBananaModel, extra_input_json: JSON.stringify(extraInput) });
     return await kie.fetchImageAsBlob(urls[0]);
   }
 
